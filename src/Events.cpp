@@ -1,4 +1,4 @@
-#include "Events.h"
+Ôªø#include "Events.h"
 
 void Sink::UpdateRegisteredHotkeys() {
     auto* controlMap = RE::ControlMap::GetSingleton();
@@ -29,11 +29,11 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
     for (auto* event = *a_event; event; event = event->next) {
         RE::INPUT_DEVICE device = event->GetDevice();
 
-        // --- L”GICA DE MOVIMENTO (TECLADO E CONTROLE) ---
+        // --- L√ìGICA DE MOVIMENTO (TECLADO E CONTROLE) ---
         if (event->GetEventType() == RE::INPUT_EVENT_TYPE::kThumbstick) {
             auto* thumbstick = event->AsThumbstickEvent();
             if (thumbstick && thumbstick->IsLeft()) {
-                // Normalizamos os valores para evitar pequenas flutuaÁıes do analÛgico
+                // Normalizamos os valores para evitar pequenas flutua√ß√µes do anal√≥gico
                 bool new_c_up = thumbstick->yValue > 0.5f;
                 bool new_c_down = thumbstick->yValue < -0.5f;
                 bool new_c_left = thumbstick->xValue < -0.5f;
@@ -61,80 +61,56 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
         }
         else if (event->GetEventType() == RE::INPUT_EVENT_TYPE::kButton) {
             auto* button = event->AsButtonEvent();
-            const uint32_t scanCode = button->GetIDCode();
+            if (button->IsDown() || button->IsUp()) {
+                auto CheckOSKey = [](std::uint32_t dik_code) -> bool {
+                    UINT vk = MapVirtualKeyA(dik_code, 3 /* MAPVK_VSC_TO_VK_EX */);
+                    if (vk == 0) return false;
 
-            // LÛgica rigorosa de m·quina de estados para cada tecla
-            if (scanCode == keyForward) {
-                // SÛ mude para 'pressionado' se a tecla ESTIVER 'down' E nosso estado atual for 'solto'.
-                if (button->IsDown() && !w_pressed) {
-                    w_pressed = true;
-                    umaTeclaMudou = true;
-                }
-                // SÛ mude para 'solto' se a tecla ESTIVER 'up' E nosso estado atual for 'pressionado'.
-                else if (button->IsUp() && w_pressed) {
-                    w_pressed = false;
-                    umaTeclaMudou = true;
-                }
-            }
-            else if (scanCode == keyLeft) {
-                if (button->IsDown() && !a_pressed) {
-                    a_pressed = true;
-                    umaTeclaMudou = true;
-                }
-                else if (button->IsUp() && a_pressed) {
-                    a_pressed = false;
-                    umaTeclaMudou = true;
-                }
-            }
-            else if (scanCode == keyBack) {
-                if (button->IsDown() && !s_pressed) {
-                    s_pressed = true;
-                    umaTeclaMudou = true;
-                }
-                else if (button->IsUp() && s_pressed) {
-                    s_pressed = false;
-                    umaTeclaMudou = true;
-                }
-            }
-            else if (scanCode == keyRight) {
-                if (button->IsDown() && !d_pressed) {
-                    d_pressed = true;
-                    umaTeclaMudou = true;
-                }
-                else if (button->IsUp() && d_pressed) {
-                    d_pressed = false;
-                    umaTeclaMudou = true;
-                }
-            }
-            else if (scanCode == 0x2A) { // Left Shift
-                if (button->IsDown() && !ls_pressed) { ls_pressed = true; umaTeclaMudou = true; }
-                else if (button->IsUp() && ls_pressed) { ls_pressed = false; umaTeclaMudou = true; }
-            }
-            else if (scanCode == 0x10) { // Q
-                if (button->IsDown() && !q_pressed) { q_pressed = true; umaTeclaMudou = true; }
-                else if (button->IsUp() && q_pressed) { q_pressed = false; umaTeclaMudou = true; }
-            }
-            else if (scanCode == 0x12) { // E
-                if (button->IsDown() && !e_pressed) { e_pressed = true; umaTeclaMudou = true; }
-                else if (button->IsUp() && e_pressed) { e_pressed = false; umaTeclaMudou = true; }
-            }
-            else if (scanCode == 0x38) { // Left Alt
-                if (button->IsDown() && !la_pressed) { la_pressed = true; umaTeclaMudou = true; }
-                else if (button->IsUp() && la_pressed) { la_pressed = false; umaTeclaMudou = true; }
-            }
-            else if (scanCode == 0x2C) { // Z
-                if (button->IsDown() && !z_pressed) { z_pressed = true; umaTeclaMudou = true; }
-                else if (button->IsUp() && z_pressed) { z_pressed = false; umaTeclaMudou = true; }
-            }
-            else if (scanCode == 0x2D) { // X
-                if (button->IsDown() && !x_pressed) { x_pressed = true; umaTeclaMudou = true; }
-                else if (button->IsUp() && x_pressed) { x_pressed = false; umaTeclaMudou = true; }
-            }
+                    // Se o bit mais alto (0x8000) for 1, a tecla est√° fisicamente pressionada agora
+                    return (GetAsyncKeyState(vk) & 0x8000) != 0;
+                    };
 
+                // Puxamos o estado real, validado direto do hardware
+                bool new_w = CheckOSKey(keyForward);
+                bool new_s = CheckOSKey(keyBack);
+                bool new_a = CheckOSKey(keyLeft);
+                bool new_d = CheckOSKey(keyRight);
 
+                bool new_ls = CheckOSKey(0x2A); // Left Shift
+                bool new_q = CheckOSKey(0x10); // Q
+                bool new_e = CheckOSKey(0x12); // E
+                bool new_la = CheckOSKey(0x38); // Left Alt
+                bool new_z = CheckOSKey(0x2C); // Z
+                bool new_x = CheckOSKey(0x2D); // X
+
+                // Verifica se houve alguma diverg√™ncia entre as vari√°veis locais da nossa 
+                // state machine e a realidade f√≠sica atual do teclado.
+                if (w_pressed != new_w || s_pressed != new_s || a_pressed != new_a || d_pressed != new_d ||
+                    ls_pressed != new_ls || q_pressed != new_q || e_pressed != new_e ||
+                    la_pressed != new_la || z_pressed != new_z || x_pressed != new_x)
+                {
+                    // Sincroniza o estado local com o estado real
+                    w_pressed = new_w;
+                    s_pressed = new_s;
+                    a_pressed = new_a;
+                    d_pressed = new_d;
+
+                    ls_pressed = new_ls;
+                    q_pressed = new_q;
+                    e_pressed = new_e;
+                    la_pressed = new_la;
+                    z_pressed = new_z;
+                    x_pressed = new_x;
+
+                    // Como algo mudou, sinalizamos para recalcular o DirectionalState no fim do loop
+                    umaTeclaMudou = true;
+                }
+
+				
+            }
         }
         int previousDirectionalState = directionalState;
-        // Apenas recalcule a direÁ„o se uma das nossas teclas de movimento REALMENTE mudou de estado.
+
         if (umaTeclaMudou) {
             UpdateDirectionalState();
         }
@@ -149,7 +125,7 @@ void Sink::InputListener::UpdateDirectionalState()
     int VariavelAnterior = directionalState;
 
     // Prioriza o input do teclado. Se qualquer tecla WASD estiver pressionada, ignore o controle.
-    // Caso contr·rio, use o estado do controle.
+    // Caso contr√°rio, use o estado do controle.
     bool FRENTE = w_pressed || (!w_pressed && !a_pressed && !s_pressed && !d_pressed && c_up);
     bool TRAS = s_pressed || (!w_pressed && !a_pressed && !s_pressed && !d_pressed && c_down);
     bool ESQUERDA = a_pressed || (!w_pressed && !a_pressed && !s_pressed && !d_pressed && c_left);
@@ -162,8 +138,8 @@ void Sink::InputListener::UpdateDirectionalState()
     bool out_z = z_pressed;  
     bool out_x = x_pressed;  
 
-    // A lÛgica de decis„o permanece a mesma, mas agora usa as vari·veis combinadas
-    // 1∫ Prioridade: 3 Teclas pressionadas simultaneamente
+    // A l√≥gica de decis√£o permanece a mesma, mas agora usa as vari√°veis combinadas
+    // 1¬∫ Prioridade: 3 Teclas pressionadas simultaneamente
     if (ESQUERDA && FRENTE && DIREITA) {
         directionalState = 11;
     }
@@ -176,7 +152,7 @@ void Sink::InputListener::UpdateDirectionalState()
     else if (TRAS && FRENTE && ESQUERDA) {
         directionalState = 14; 
     }
-    // 2∫ Prioridade: 2 Teclas OPOSTAS pressionadas simultaneamente
+    // 2¬∫ Prioridade: 2 Teclas OPOSTAS pressionadas simultaneamente
     else if (FRENTE && TRAS) {
         directionalState = 9;
     }
@@ -203,7 +179,7 @@ void Sink::InputListener::UpdateDirectionalState()
         directionalState = 7;  // Oeste (Esquerda)
     }
     else if (TRAS) {
-        directionalState = 5;  // Sul (Tr·s)
+        directionalState = 5;  // Sul (Tr√°s)
     }
     else if (DIREITA) {
         directionalState = 3;  // Leste (Direita)
