@@ -61,7 +61,7 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
         }
         else if (event->GetEventType() == RE::INPUT_EVENT_TYPE::kButton) {
             auto* button = event->AsButtonEvent();
-            if (button->IsDown() || button->IsUp()) {
+            if (device == RE::INPUT_DEVICE::kKeyboard && (button->IsDown() || button->IsUp())) {
                 auto CheckOSKey = [](std::uint32_t dik_code) -> bool {
                     UINT vk = MapVirtualKeyA(dik_code, 3 /* MAPVK_VSC_TO_VK_EX */);
                     if (vk == 0) return false;
