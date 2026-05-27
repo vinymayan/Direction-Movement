@@ -1,4 +1,10 @@
+Ôªø#pragma once
+#include <shared_mutex>
+
+static bool TweenPause = false;
+
 namespace Sink {
+
     // Variaveis de estado globais de input (para nao precisar mexer no seu Events.h)
     static bool ls_pressed = false; // Left Shift (0x2A)
     static bool q_pressed = false;  // Q (0x10)
@@ -18,27 +24,55 @@ namespace Sink {
     inline uint32_t keyLeft = 0x1E;
     inline uint32_t keyRight = 0x20;
 
+    static bool vw_pressed = false;
+    static bool vs_pressed = false;
+    static bool va_pressed = false;
+    static bool vd_pressed = false;
+
+    static float mouseCamX = 0.0f;
+    static float mouseCamY = 0.0f;
+    static bool m_up = false;
+    static bool m_down = false;
+    static bool m_left = false;
+    static bool m_right = false;
+
+    class TweenInputListener : public RE::BSTEventSink<SKSE::ModCallbackEvent> {
+    public:
+        static TweenInputListener* GetSingleton() {
+            static TweenInputListener singleton;
+            return &singleton;
+        }
+
+        static void Register() {
+            auto eventSource = SKSE::GetModCallbackEventSource();
+            if (eventSource) {
+                eventSource->AddEventSink(GetSingleton());
+                SKSE::log::info("[Prisma] Listener do Input Manager Registrado e aguardando comandos!");
+            }
+        }
+
+        RE::BSEventNotifyControl ProcessEvent(const SKSE::ModCallbackEvent* a_event, RE::BSTEventSource<SKSE::ModCallbackEvent>*) override;
+    };
+
     class InputListener : public RE::BSTEventSink<RE::InputEvent*> {
     public:
-        // Singleton para garantir que exista apenas uma inst‚ncia
+        // Singleton para garantir que exista apenas uma inst√¢ncia
         static InputListener* GetSingleton() {
             static InputListener singleton;
             return &singleton;
         }
 
         static inline RE::INPUT_DEVICE lastUsedDevice = RE::INPUT_DEVICE::kKeyboard;
-        // A funÁ„o que processa os eventos de input do jogo
+        // A fun√ß√£o que processa os eventos de input do jogo
         virtual RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event,
             RE::BSTEventSource<RE::InputEvent*>* a_eventSource) override;
-        static int GetDirectionalState() { return directionalState; };
-
+        void ForceDirectionalUpdate() { UpdateDirectionalState(); }
     protected:
 
     private:
-        // FunÁ„o para calcular a direÁ„o com base nas teclas pressionadas
+        // Fun√ß√£o para calcular a dire√ß√£o com base nas teclas pressionadas
         void UpdateDirectionalState();
-        static inline int directionalState = 0;
-        // Vari·veis para rastrear o estado de cada tecla de movimento
+        // Vari√°veis para rastrear o estado de cada tecla de movimento
         bool w_pressed = false;
         bool a_pressed = false;
         bool s_pressed = false;
@@ -72,4 +106,55 @@ namespace Sink {
     };
 
     void UpdateRegisteredHotkeys();
+
+    static void ScheduleSinkRegistration(RE::Actor* actor, int attempts);
+
+
+    class NpcCycleSink : public RE::BSTEventSink<RE::BSAnimationGraphEvent> {
+    public:
+        static NpcCycleSink* GetSingleton() {
+            static NpcCycleSink singleton;
+            return &singleton;
+        }
+
+        RE::BSEventNotifyControl ProcessEvent(const RE::BSAnimationGraphEvent* a_event,
+            RE::BSTEventSource<RE::BSAnimationGraphEvent>*) override;
+    };
+
+
+
+    class NpcCombatTracker : public RE::BSTEventSink<RE::TESCombatEvent> {
+    public:
+        static NpcCombatTracker* GetSingleton() {
+            static NpcCombatTracker singleton;
+            return &singleton;
+        }
+
+        // Fun√ß√£o chamada quando um evento de combate ocorre
+        RE::BSEventNotifyControl ProcessEvent(const RE::TESCombatEvent* a_event,
+            RE::BSTEventSource<RE::TESCombatEvent>*) override;
+
+        static void RegisterSink(RE::Actor* a_actor);
+        static void UnregisterSink(RE::Actor* a_actor);
+
+        static void RegisterSinksForExistingCombatants();
+
+    private:
+        // Inst√¢ncia compartilhada do nosso processador de l√≥gica
+        inline static NpcCycleSink g_npcSink;
+
+        // Guarda os FormIDs dos NPCs que j√° estamos ouvindo
+        inline static std::set<RE::FormID> g_trackedNPCs;
+        inline static std::shared_mutex g_mutex;
+    };
+
+    class PC3DLoadEventHandler : public RE::BSTEventSink<RE::TESObjectLoadedEvent> {
+    public:
+        static PC3DLoadEventHandler* GetSingleton() {
+            static PC3DLoadEventHandler singleton;
+            return &singleton;
+        }
+
+        RE::BSEventNotifyControl ProcessEvent(const RE::TESObjectLoadedEvent* a_event, RE::BSTEventSource<RE::TESObjectLoadedEvent>*) override;
+    };
 }
