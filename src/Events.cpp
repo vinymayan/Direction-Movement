@@ -32,8 +32,7 @@ void UpdateNPCDirectionalState(RE::Actor* a_npc) {
         while (angle < 0.0f) angle += 360.0f;
         while (angle >= 360.0f) angle -= 360.0f;
 
-        SKSE::log::info("[NPC Direcional] NPC: {:08X} | VelX: {:.2f} | VelY: {:.2f} | Angulo Local Calculado: {:.2f}",
-            a_npc->GetFormID(), velocityX, velocityY, angle);
+        //SKSE::log::info("[NPC Direcional] NPC: {:08X} | VelX: {:.2f} | VelY: {:.2f} | Angulo Local Calculado: {:.2f}", a_npc->GetFormID(), velocityX, velocityY, angle);
 
         // Mapeia os ângulos convertidos para o seu sistema de Movesets (1 a 8)
         if (angle > 337.5f || angle <= 22.5f) {
@@ -63,28 +62,11 @@ void UpdateNPCDirectionalState(RE::Actor* a_npc) {
     }
     else {
         // Se a velocidade ou a intenção de movimento for zero
-        SKSE::log::info("[NPC Direcional] NPC: {:08X} | Estado: PARADO (IsMoving == false)", a_npc->GetFormID());
+        //SKSE::log::info("[NPC Direcional] NPC: {:08X} | Estado: PARADO (IsMoving == false)", a_npc->GetFormID());
     }
 
     // Aplica na Animation Graph do NPC
     a_npc->SetGraphVariableInt("DirecionalCycleMoveset", directionalState);
-}
-
-void Sink::UpdateRegisteredHotkeys() {
-    auto* controlMap = RE::ControlMap::GetSingleton();
-    const auto* userEvents = RE::UserEvents::GetSingleton();
-
-    if (controlMap && userEvents) {
-        // Pega as teclas de movimento mapeadas no teclado pelo jogador
-        keyForward = controlMap->GetMappedKey(userEvents->forward, RE::INPUT_DEVICE::kKeyboard);
-        keyBack = controlMap->GetMappedKey(userEvents->back, RE::INPUT_DEVICE::kKeyboard);
-        keyLeft = controlMap->GetMappedKey(userEvents->strafeLeft, RE::INPUT_DEVICE::kKeyboard);
-        keyRight = controlMap->GetMappedKey(userEvents->strafeRight, RE::INPUT_DEVICE::kKeyboard);
-
-        // Opcional: Logar as teclas para confirmar se pegou os Scan Codes corretos
-        SKSE::log::info("Teclas de Movimento - Frente: {}, Tras: {}, Esquerda: {}, Direita: {}", Sink::keyForward, Sink::keyBack, Sink::keyLeft, Sink::keyRight);
-    }
-
 }
 
 RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>* a_eventSource)
@@ -134,6 +116,9 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
                         m_up = false; m_down = false; m_left = false; m_right = false;
                         umaTeclaMudou = true;
                     }
+                    if (w_pressed || s_pressed || a_pressed || d_pressed || c_up || c_down || c_left || c_right) {
+                        umaTeclaMudou = true;
+                    }
                 }
             }
         }
@@ -171,6 +156,11 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
                 m_left = new_m_left;
                 m_right = new_m_right;
                 umaTeclaMudou = true;
+            }
+            if (mouseEvent->mouseInputX != 0 || mouseEvent->mouseInputY != 0) {
+                if (w_pressed || s_pressed || a_pressed || d_pressed || c_up || c_down || c_left || c_right) {
+                    umaTeclaMudou = true;
+                }
             }
         }
         else if (event->GetEventType() == RE::INPUT_EVENT_TYPE::kButton) {
@@ -243,81 +233,110 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
 
 void Sink::InputListener::UpdateDirectionalState()
 {
-    //static int DirecionalCycleMoveset = 0;
     int directionalState = 0;
 
-    // Prioriza o input do teclado. Se qualquer tecla WASD estiver pressionada, ignore o controle.
-    // Caso contrário, use o estado do controle.
-    bool is_w = w_pressed || vw_pressed;
-    bool is_a = a_pressed || va_pressed;
-    bool is_s = s_pressed || vs_pressed;
-    bool is_d = d_pressed || vd_pressed;
+    if (OARConverterUI::DirectionalMode) {
 
-    // Lógica ajustada para usar as novas booleanas mescladas
-    bool FRENTE = is_w || (!is_w && !is_a && !is_s && !is_d && c_up);
-    bool TRAS = is_s || (!is_w && !is_a && !is_s && !is_d && c_down);
-    bool ESQUERDA = is_a || (!is_w && !is_a && !is_s && !is_d && c_left);
-    bool DIREITA = is_d || (!is_w && !is_a && !is_s && !is_d && c_right);
+        // 1. Construímos o vetor de input direcional baseado no estado atual das teclas mapeadas
+        float inputX = 0.0f;
+        float inputY = 0.0f;
 
-    bool out_ls = ls_pressed || rs_left; 
-    bool out_la = la_pressed || rs_right; 
-    bool out_q = q_pressed || rs_down; 
-    bool out_e = e_pressed || rs_up; 
-    bool out_z = z_pressed;  
-    bool out_x = x_pressed;  
+        bool is_w = w_pressed || vw_pressed;
+        bool is_a = a_pressed || va_pressed;
+        bool is_s = s_pressed || vs_pressed;
+        bool is_d = d_pressed || vd_pressed;
 
-    // A lógica de decisão permanece a mesma, mas agora usa as variáveis combinadas
-    // 1º Prioridade: 3 Teclas pressionadas simultaneamente
-    if (ESQUERDA && FRENTE && DIREITA) {
-        directionalState = 11;
+        if (is_w) inputY += 1.0f;
+        if (is_s) inputY -= 1.0f;
+        if (is_d) inputX += 1.0f;
+        if (is_a) inputX -= 1.0f;
+
+        // Se não houver input no teclado, verifica os analógicos do controle (Gamepad)
+        if (inputX == 0.0f && inputY == 0.0f) {
+            if (c_up)    inputY += 1.0f;
+            if (c_down)  inputY -= 1.0f;
+            if (c_right) inputX += 1.0f;
+            if (c_left)  inputX -= 1.0f;
+        }
+
+        // 2. Se o jogador estiver aplicando qualquer força de movimento
+        if (inputX != 0.0f || inputY != 0.0f) {
+
+            // Ângulo bruto vindo do teclado/controle em Radianos
+            float inputAngleRad = std::atan2(inputX, inputY);
+            float cameraValueRad = 0.0f;
+
+            // Obtemos nativamente o multiplicador de órbita livre da câmera em 3ª pessoa
+            auto* playerCamera = RE::PlayerCamera::GetSingleton();
+            if (playerCamera && playerCamera->currentState) {
+                if (playerCamera->currentState->id == RE::CameraState::kThirdPerson ||
+                    playerCamera->currentState->id == RE::CameraState::kMount) {
+                    auto* thirdPersonState = static_cast<RE::ThirdPersonState*>(playerCamera->currentState.get());
+                    cameraValueRad = thirdPersonState->freeRotation.x;
+                }
+            }
+
+            // A MÁGICA: Soma a rotação da câmera com a direção das teclas pressionadas
+            float angle = (cameraValueRad + inputAngleRad) * (180.0f / 3.14159265358979323846f);
+
+            // Normalização matemática padrão (0 a 360)
+            while (angle < 0.0f) angle += 360.0f;
+            while (angle >= 360.0f) angle -= 360.0f;
+
+            // Mapeamento nativo limpo de 1 a 8
+            if (angle > 337.5f || angle <= 22.5f)       directionalState = 1;  // Norte (Frente)
+            else if (angle > 22.5f && angle <= 67.5f)   directionalState = 2;  // Nordeste
+            else if (angle > 67.5f && angle <= 112.5f)  directionalState = 3;  // Leste (Direita)
+            else if (angle > 112.5f && angle <= 157.5f) directionalState = 4;  // Sudeste
+            else if (angle > 157.5f && angle <= 202.5f) directionalState = 5;  // Sul (Trás)
+            else if (angle > 202.5f && angle <= 247.5f) directionalState = 6;  // Sudoeste
+            else if (angle > 247.5f && angle <= 292.5f) directionalState = 7;  // Oeste (Esquerda)
+            else if (angle > 292.5f && angle <= 337.5f) directionalState = 8;  // Noroeste
+        }
+        else {
+            directionalState = 0; // Parado
+        }
     }
-    else if (TRAS && FRENTE && DIREITA) {
-        directionalState = 12;
-    }
-    else if (ESQUERDA && TRAS && DIREITA) {
-        directionalState = 13;
-    }
-    else if (TRAS && FRENTE && ESQUERDA) {
-        directionalState = 14; 
-    }
-    // 2º Prioridade: 2 Teclas OPOSTAS pressionadas simultaneamente
-    else if (FRENTE && TRAS) {
-        directionalState = 9;
-    }
-    else if (ESQUERDA && DIREITA) {
-        directionalState = 10;
+    else  {
+        bool is_w = w_pressed || vw_pressed;
+        bool is_a = a_pressed || va_pressed;
+        bool is_s = s_pressed || vs_pressed;
+        bool is_d = d_pressed || vd_pressed;
+
+        bool FRENTE = is_w || (!is_w && !is_a && !is_s && !is_d && c_up);
+        bool TRAS = is_s || (!is_w && !is_a && !is_s && !is_d && c_down);
+        bool ESQUERDA = is_a || (!is_w && !is_a && !is_s && !is_d && c_left);
+        bool DIREITA = is_d || (!is_w && !is_a && !is_s && !is_d && c_right);
+
+        // 1º Prioridade: 3 Teclas pressionadas simultaneamente
+        if (ESQUERDA && FRENTE && DIREITA)       directionalState = 11;
+        else if (TRAS && FRENTE && DIREITA)      directionalState = 12;
+        else if (ESQUERDA && TRAS && DIREITA)    directionalState = 13;
+        else if (TRAS && FRENTE && ESQUERDA)     directionalState = 14;
+        // 2º Prioridade: 2 Teclas OPOSTAS pressionadas simultaneamente
+        else if (FRENTE && TRAS)                 directionalState = 9;
+        else if (ESQUERDA && DIREITA)            directionalState = 10;
+        // 3º Prioridade: Diagonais normais e direções simples
+        else if (FRENTE && ESQUERDA)             directionalState = 8;  // Noroeste
+        else if (FRENTE && DIREITA)              directionalState = 2;  // Nordeste
+        else if (TRAS && ESQUERDA)               directionalState = 6;  // Sudoeste
+        else if (TRAS && DIREITA)                directionalState = 4;  // Sudeste
+        else if (FRENTE)                         directionalState = 1;  // Norte (Frente)
+        else if (ESQUERDA)                       directionalState = 7;  // Oeste (Esquerda)
+        else if (TRAS)                           directionalState = 5;  // Sul (Trás)
+        else if (DIREITA)                        directionalState = 3;  // Leste (Direita)
+        else                                     directionalState = 0;  // Parado
     }
 
-    else if (FRENTE && ESQUERDA) {
-        directionalState = 8;  // Noroeste
-    }
-    else if (FRENTE && DIREITA) {
-        directionalState = 2;  // Nordeste
-    }
-    else if (TRAS && ESQUERDA) {
-        directionalState = 6;  // Sudoeste
-    }
-    else if (TRAS && DIREITA) {
-        directionalState = 4;  // Sudeste
-    }
-    else if (FRENTE) {
-        directionalState = 1;  // Norte (Frente)
-    }
-    else if (ESQUERDA) {
-        directionalState = 7;  // Oeste (Esquerda)
-    }
-    else if (TRAS) {
-        directionalState = 5;  // Sul (Trás)
-    }
-    else if (DIREITA) {
-        directionalState = 3;  // Leste (Direita)
-    }
-    else {
-        directionalState = 0;  // Parado
-    }
+    // 3. PROCESSAMENTO DE TECLAS MODIFICADORAS EXTRA (Sempre ativas)
+    bool out_ls = ls_pressed || rs_left;
+    bool out_la = la_pressed || rs_right;
+    bool out_q = q_pressed || rs_down;
+    bool out_e = e_pressed || rs_up;
+    bool out_z = z_pressed;
+    bool out_x = x_pressed;
 
-    // --- MOVIMENTO DE CÂMERA (CameraMovementCMF) ---
-    // Mesclamos o input do Analógico Direito com o nosso Mouse Virtual
+    // 4. PROCESSAMENTO DO MOVIMENTO DE CÂMERA (Sempre ativo, mouse ou analógico direito)
     bool CAM_FRENTE = rs_up || m_up;
     bool CAM_TRAS = rs_down || m_down;
     bool CAM_ESQUERDA = rs_left || m_left;
@@ -325,20 +344,20 @@ void Sink::InputListener::UpdateDirectionalState()
 
     int cameraMovementCMF = 0;
 
-    if (CAM_FRENTE && CAM_ESQUERDA) cameraMovementCMF = 8;
-    else if (CAM_FRENTE && CAM_DIREITA) cameraMovementCMF = 2;
-    else if (CAM_TRAS && CAM_ESQUERDA) cameraMovementCMF = 6;
-    else if (CAM_TRAS && CAM_DIREITA) cameraMovementCMF = 4;
-    else if (CAM_FRENTE) cameraMovementCMF = 1;
-    else if (CAM_ESQUERDA) cameraMovementCMF = 7;
-    else if (CAM_TRAS) cameraMovementCMF = 5;
-    else if (CAM_DIREITA) cameraMovementCMF = 3;
-    else cameraMovementCMF = 0; 
+    if (CAM_FRENTE && CAM_ESQUERDA)       cameraMovementCMF = 8;
+    else if (CAM_FRENTE && CAM_DIREITA)   cameraMovementCMF = 2;
+    else if (CAM_TRAS && CAM_ESQUERDA)    cameraMovementCMF = 6;
+    else if (CAM_TRAS && CAM_DIREITA)     cameraMovementCMF = 4;
+    else if (CAM_FRENTE)                  cameraMovementCMF = 1;
+    else if (CAM_ESQUERDA)                cameraMovementCMF = 7;
+    else if (CAM_TRAS)                    cameraMovementCMF = 5;
+    else if (CAM_DIREITA)                 cameraMovementCMF = 3;
+    else                                  cameraMovementCMF = 0;
 
-    if(cameraMovementCMF == 0) {
+    if (cameraMovementCMF == 0) {
         mouseCamX = 0.0f;
         mouseCamY = 0.0f;
-	}
+    }
 
     auto* player = RE::PlayerCharacter::GetSingleton();
     if (player) {
@@ -351,16 +370,6 @@ void Sink::InputListener::UpdateDirectionalState()
         player->SetGraphVariableBool("DMKZ", out_z);
         player->SetGraphVariableBool("DMKX", out_x);
     }
-
-}
-
-RE::BSEventNotifyControl Sink::MenuWatcher::ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*)
-{
-    if (a_event && !a_event->opening && a_event->menuName == RE::JournalMenu::MENU_NAME) {
-        Sink::UpdateRegisteredHotkeys();
-    }
-
-    return RE::BSEventNotifyControl::kContinue;
 }
 
 RE::BSEventNotifyControl Sink::TweenInputListener::ProcessEvent(const SKSE::ModCallbackEvent* a_event, RE::BSTEventSource<SKSE::ModCallbackEvent>*)
@@ -408,6 +417,9 @@ RE::BSEventNotifyControl Sink::NpcCycleSink::ProcessEvent(const RE::BSAnimationG
 
     if(!isPlayer) {
 		UpdateNPCDirectionalState(npc);
+    }
+    else {
+        InputListener::GetSingleton()->UpdateDirectionalState();
     }
     return RE::BSEventNotifyControl::kContinue;
 }
@@ -498,7 +510,11 @@ void Sink::ScheduleSinkRegistration(RE::Actor* actor, int attempts)
             actor->GetAnimationGraphManager(graphManager);
 
             if (graphManager) {
-                if (!actor->IsPlayerRef()) {
+                if (actor->IsPlayerRef()) {
+                    Sink::NpcCombatTracker::UnregisterSink(actor);
+                    Sink::NpcCombatTracker::RegisterSink(actor);
+                }
+                else {
                     Sink::NpcCombatTracker::UnregisterSink(actor);
                     if (!OARConverterUI::NPCOnlyCombat || actor->IsInCombat()) {
                         Sink::NpcCombatTracker::RegisterSink(actor);

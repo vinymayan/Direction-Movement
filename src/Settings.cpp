@@ -420,6 +420,7 @@ namespace OARConverterUI {
         auto& alloc = doc.GetAllocator();
 
         doc.AddMember("NPCOnlyCombat", NPCOnlyCombat, alloc);
+        doc.AddMember("DirectionalMode", DirectionalMode, alloc);
 
         FILE* fp = nullptr;
         fopen_s(&fp, SETTINGS_PATH, "wb");
@@ -444,6 +445,7 @@ namespace OARConverterUI {
 
             if (doc.IsObject()) {
                 if (doc.HasMember("NPCOnlyCombat")) NPCOnlyCombat = doc["NPCOnlyCombat"].GetBool();
+                if (doc.HasMember("DirectionalMode")) DirectionalMode = doc["DirectionalMode"].GetBool(); 
             }
         }
     }
@@ -530,6 +532,19 @@ namespace OARConverterUI {
         ImGuiMCP::Separator();
         ImGuiMCP::Spacing();
 
+        // --- SEÇÃO DO PLAYER ---
+        ImGuiMCP::TextColored({ 0.4f, 1.0f, 0.4f, 1.0f }, "%s", GetLoc("menu.player_section", "Player Configuration"));
+        ImGuiMCP::Spacing();
+
+        if (ImGuiMCP::Checkbox(GetLoc("menu.enable_custom_360", "Enable Custom 360° Directional Movement Logic"), &DirectionalMode)) {
+            changed = true;
+        }
+        ImGuiMCP::TextWrapped("%s", GetLoc("menu.custom_360_desc", "Enables camera-relative calculations for 360 movement mods without requiring TDM API. Complex states (9 to 14) are disabled in this mode."));
+        ImGuiMCP::Spacing();
+        ImGuiMCP::Separator();
+        ImGuiMCP::Spacing();
+
+        // --- SEÇÃO DOS NPCS ---
         ImGuiMCP::TextColored({ 0.4f, 1.0f, 0.4f, 1.0f }, "%s", GetLoc("menu.npc_section", "NPC Configuration"));
         ImGuiMCP::Spacing();
 
@@ -552,7 +567,7 @@ namespace OARConverterUI {
         LoadLanguage();
         LoadSettings();
 
-        SKSEMenuFramework::SetSection("Directional Movement");
+        SKSEMenuFramework::SetSection("DMK");
         SKSEMenuFramework::AddSectionItem(GetLoc("menu.legacy_converter", "Legacy Converter"), RenderMenu);
         SKSEMenuFramework::AddSectionItem(GetLoc("menu.settings", "Settings"), MSettings);
         SKSE::log::info("OAR Converter UI & Settings Registered successfully.");

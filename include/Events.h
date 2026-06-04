@@ -4,7 +4,6 @@
 static bool TweenPause = false;
 
 namespace Sink {
-
     // Variaveis de estado globais de input (para nao precisar mexer no seu Events.h)
     static bool ls_pressed = false; // Left Shift (0x2A)
     static bool q_pressed = false;  // Q (0x10)
@@ -67,11 +66,12 @@ namespace Sink {
         virtual RE::BSEventNotifyControl ProcessEvent(RE::InputEvent* const* a_event,
             RE::BSTEventSource<RE::InputEvent*>* a_eventSource) override;
         void ForceDirectionalUpdate() { UpdateDirectionalState(); }
+        void UpdateDirectionalState();
     protected:
 
     private:
         // Função para calcular a direção com base nas teclas pressionadas
-        void UpdateDirectionalState();
+        
         // Variáveis para rastrear o estado de cada tecla de movimento
         bool w_pressed = false;
         bool a_pressed = false;
@@ -84,31 +84,8 @@ namespace Sink {
         bool c_down = false;
         bool c_right = false;
     };
-    class MenuWatcher : public RE::BSTEventSink<RE::MenuOpenCloseEvent>
-    {
-    public:
-        static MenuWatcher* GetSingleton()
-        {
-            static MenuWatcher singleton;
-            return &singleton;
-        }
-
-        void Register()
-        {
-            auto ui = RE::UI::GetSingleton();
-            if (ui) {
-                ui->AddEventSink(this);
-                SKSE::log::info("MenuWatcher registrado para monitorar o JournalMenu.");
-            }
-        }
-
-        RE::BSEventNotifyControl ProcessEvent(const RE::MenuOpenCloseEvent* a_event, RE::BSTEventSource<RE::MenuOpenCloseEvent>*) override;
-    };
-
-    void UpdateRegisteredHotkeys();
 
     static void ScheduleSinkRegistration(RE::Actor* actor, int attempts);
-
 
     class NpcCycleSink : public RE::BSTEventSink<RE::BSAnimationGraphEvent> {
     public:
@@ -120,8 +97,6 @@ namespace Sink {
         RE::BSEventNotifyControl ProcessEvent(const RE::BSAnimationGraphEvent* a_event,
             RE::BSTEventSource<RE::BSAnimationGraphEvent>*) override;
     };
-
-
 
     class NpcCombatTracker : public RE::BSTEventSink<RE::TESCombatEvent> {
     public:

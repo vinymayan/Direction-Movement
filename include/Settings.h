@@ -18,6 +18,7 @@
 
 namespace OARConverterUI {
 	inline bool NPCOnlyCombat = true;
+    inline bool DirectionalMode = false;
     namespace fs = std::filesystem;
 
     void LoadLanguage();

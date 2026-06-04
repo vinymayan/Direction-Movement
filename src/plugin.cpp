@@ -5,8 +5,6 @@
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kDataLoaded) {
-        //Sink::MenuWatcher::GetSingleton()->Register();
-        //Sink::UpdateRegisteredHotkeys();
         OARConverterUI::Register();
         if (GetModuleHandleW(L"TweenPause.dll")) {
             TweenPause = true;
