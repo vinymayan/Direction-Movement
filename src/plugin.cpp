@@ -1,11 +1,13 @@
 ﻿#include "logger.h"
 #include "Events.h"
+#include "Hooks.h"
 #include "Settings.h"
 #include "InputManagerAPI.h"
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
     if (message->type == SKSE::MessagingInterface::kDataLoaded) {
         OARConverterUI::Register();
+        Hooks::InstallWindowFocusHook();
         if (GetModuleHandleW(L"TweenPause.dll")) {
             TweenPause = true;
             logger::info("TweenPause.dll founded");
@@ -24,6 +26,7 @@ void OnMessage(SKSE::MessagingInterface::Message* message) {
         RE::ScriptEventSourceHolder::GetSingleton()->AddEventSink(Sink::PC3DLoadEventHandler::GetSingleton());
     }
     if (message->type == SKSE::MessagingInterface::kNewGame || message->type == SKSE::MessagingInterface::kPostLoadGame) {
+        Hooks::InstallWindowFocusHook();
         RE::ScriptEventSourceHolder::GetSingleton()->AddEventSink(Sink::NpcCombatTracker::GetSingleton());
         Sink::NpcCombatTracker::RegisterSinksForExistingCombatants();
         if (auto* inputDeviceManager = RE::BSInputDeviceManager::GetSingleton()) {

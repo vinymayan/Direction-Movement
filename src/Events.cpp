@@ -182,16 +182,16 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
 
                 if (userEvents) {
                     if (userEventStr == userEvents->forward) {
-                            new_w = isPressed;
+                        new_w = isPressed;
                     }
                     else if (userEventStr == userEvents->back) {
-                            new_s = isPressed;
+                        new_s = isPressed;
                     }
                     else if (userEventStr == userEvents->strafeLeft) {
-                            new_a = isPressed;
+                        new_a = isPressed;
                     }
                     else if (userEventStr == userEvents->strafeRight) {
-                            new_d = isPressed;
+                        new_d = isPressed;
                     }
                 }
 
@@ -359,6 +359,50 @@ void Sink::InputListener::UpdateDirectionalState()
         mouseCamY = 0.0f;
     }
 
+    static int lastLoggedDirectionalState = -1;
+    static int lastLoggedCameraMovementCMF = -1;
+    static bool lastLoggedW = false;
+    static bool lastLoggedA = false;
+    static bool lastLoggedS = false;
+    static bool lastLoggedD = false;
+    static bool lastLoggedCUp = false;
+    static bool lastLoggedCLeft = false;
+    static bool lastLoggedCDown = false;
+    static bool lastLoggedCRight = false;
+
+    if (lastLoggedDirectionalState != directionalState ||
+        lastLoggedCameraMovementCMF != cameraMovementCMF ||
+        lastLoggedW != w_pressed ||
+        lastLoggedA != a_pressed ||
+        lastLoggedS != s_pressed ||
+        lastLoggedD != d_pressed ||
+        lastLoggedCUp != c_up ||
+        lastLoggedCLeft != c_left ||
+        lastLoggedCDown != c_down ||
+        lastLoggedCRight != c_right)
+    {
+        /*SKSE::log::info(
+            "[DMK Input] 360={} | W/A/S/D={}/{}/{}/{} | Virtual F/L/B/R={}/{}/{}/{} | Pad U/L/D/R={}/{}/{}/{} | Cam U/L/D/R={}/{}/{}/{} | DirecionalCycleMoveset={} | CameraMovementCMF={}",
+            OARConverterUI::DirectionalMode,
+            w_pressed, a_pressed, s_pressed, d_pressed,
+            vw_pressed, va_pressed, vs_pressed, vd_pressed,
+            c_up, c_left, c_down, c_right,
+            CAM_FRENTE, CAM_ESQUERDA, CAM_TRAS, CAM_DIREITA,
+            directionalState,
+            cameraMovementCMF);*/
+
+        lastLoggedDirectionalState = directionalState;
+        lastLoggedCameraMovementCMF = cameraMovementCMF;
+        lastLoggedW = w_pressed;
+        lastLoggedA = a_pressed;
+        lastLoggedS = s_pressed;
+        lastLoggedD = d_pressed;
+        lastLoggedCUp = c_up;
+        lastLoggedCLeft = c_left;
+        lastLoggedCDown = c_down;
+        lastLoggedCRight = c_right;
+    }
+
     auto* player = RE::PlayerCharacter::GetSingleton();
     if (player) {
         player->SetGraphVariableInt("DirecionalCycleMoveset", directionalState);
@@ -369,6 +413,55 @@ void Sink::InputListener::UpdateDirectionalState()
         player->SetGraphVariableBool("DMKE", out_e);
         player->SetGraphVariableBool("DMKZ", out_z);
         player->SetGraphVariableBool("DMKX", out_x);
+    }
+}
+
+void Sink::InputListener::ResetInputState()
+{
+    w_pressed = false;
+    a_pressed = false;
+    s_pressed = false;
+    d_pressed = false;
+
+    vw_pressed = false;
+    va_pressed = false;
+    vs_pressed = false;
+    vd_pressed = false;
+
+    c_up = false;
+    c_down = false;
+    c_left = false;
+    c_right = false;
+
+    rs_up = false;
+    rs_down = false;
+    rs_left = false;
+    rs_right = false;
+
+    mouseCamX = 0.0f;
+    mouseCamY = 0.0f;
+    m_up = false;
+    m_down = false;
+    m_left = false;
+    m_right = false;
+
+    ls_pressed = false;
+    q_pressed = false;
+    e_pressed = false;
+    la_pressed = false;
+    z_pressed = false;
+    x_pressed = false;
+
+    auto* player = RE::PlayerCharacter::GetSingleton();
+    if (player) {
+        player->SetGraphVariableInt("DirecionalCycleMoveset", 0);
+        player->SetGraphVariableInt("CameraMovementCMF", 0);
+        player->SetGraphVariableBool("DMKLeftShift", false);
+        player->SetGraphVariableBool("DMKLeftAlt", false);
+        player->SetGraphVariableBool("DMKQ", false);
+        player->SetGraphVariableBool("DMKE", false);
+        player->SetGraphVariableBool("DMKZ", false);
+        player->SetGraphVariableBool("DMKX", false);
     }
 }
 

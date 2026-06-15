@@ -67,6 +67,7 @@ namespace Sink {
             RE::BSTEventSource<RE::InputEvent*>* a_eventSource) override;
         void ForceDirectionalUpdate() { UpdateDirectionalState(); }
         void UpdateDirectionalState();
+        void ResetInputState();
     protected:
 
     private:
