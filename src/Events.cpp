@@ -2,71 +2,80 @@
 #include "DelayedDispatcher.h"
 #include "Settings.h"
 #include <cmath>
+#include <exception>
 
 void UpdateNPCDirectionalState(RE::Actor* a_npc) {
-    if (!a_npc || a_npc->IsDead()) return;
+    if (!a_npc || a_npc->IsDead() || !a_npc->Is3DLoaded()) return;
 
-    int directionalState = 0; // 0 = Parado por padrão
+    try {
+        int directionalState = 0; // 0 = Parado por padrão
 
-    if (a_npc->IsMoving()) {
-        float velocityX = 0.0f;
-        float velocityY = 0.0f;
+        if (a_npc->IsMoving()) {
+            float velocityX = 0.0f;
+            float velocityY = 0.0f;
 
-        auto* charController = a_npc->GetCharController();
-        if (charController) {
-            velocityX = charController->outVelocity.quad.m128_f32[0];
-            velocityY = charController->outVelocity.quad.m128_f32[1];
+            auto* charController = a_npc->GetCharController();
+            if (charController) {
+                velocityX = charController->outVelocity.quad.m128_f32[0];
+                velocityY = charController->outVelocity.quad.m128_f32[1];
+            }
+
+            // 1. Calcula o ângulo da velocidade no espaço do mundo usando atan2
+            // Em Skyrim, Y é o eixo frontal-traseiro e X é o lateral.
+            float moveAngleWorld = std::atan2(velocityX, velocityY) * (180.0f / 3.14159265358979323846f);
+
+            // 2. Pega a rotação atual do NPC (para onde o modelo está olhando)
+            float npcRotationZ = a_npc->GetAngleZ() * (180.0f / 3.14159265358979323846f);
+
+            // 3. Subtrai a rotação do NPC para obter a direção Local (para onde ele anda em relação à própria frente)
+            float angle = moveAngleWorld - npcRotationZ;
+
+            // 4. Normaliza o ângulo para garantir que fique sempre entre 0 e 360 graus
+            while (angle < 0.0f) angle += 360.0f;
+            while (angle >= 360.0f) angle -= 360.0f;
+
+            //SKSE::log::info("[NPC Direcional] NPC: {:08X} | VelX: {:.2f} | VelY: {:.2f} | Angulo Local Calculado: {:.2f}", a_npc->GetFormID(), velocityX, velocityY, angle);
+
+            // Mapeia os ângulos convertidos para o seu sistema de Movesets (1 a 8)
+            if (angle > 337.5f || angle <= 22.5f) {
+                directionalState = 1;  // Norte (Frente)
+            }
+            else if (angle > 22.5f && angle <= 67.5f) {
+                directionalState = 2;  // Nordeste
+            }
+            else if (angle > 67.5f && angle <= 112.5f) {
+                directionalState = 3;  // Leste (Direita)
+            }
+            else if (angle > 112.5f && angle <= 157.5f) {
+                directionalState = 4;  // Sudeste
+            }
+            else if (angle > 157.5f && angle <= 202.5f) {
+                directionalState = 5;  // Sul (Trás)
+            }
+            else if (angle > 202.5f && angle <= 247.5f) {
+                directionalState = 6;  // Sudoeste
+            }
+            else if (angle > 247.5f && angle <= 292.5f) {
+                directionalState = 7;  // Oeste (Esquerda)
+            }
+            else if (angle > 292.5f && angle <= 337.5f) {
+                directionalState = 8;  // Noroeste
+            }
+        }
+        else {
+            // Se a velocidade ou a intenção de movimento for zero
+            //SKSE::log::info("[NPC Direcional] NPC: {:08X} | Estado: PARADO (IsMoving == false)", a_npc->GetFormID());
         }
 
-        // 1. Calcula o ângulo da velocidade no espaço do mundo usando atan2
-        // Em Skyrim, Y é o eixo frontal-traseiro e X é o lateral.
-        float moveAngleWorld = std::atan2(velocityX, velocityY) * (180.0f / 3.14159265358979323846f);
-
-        // 2. Pega a rotação atual do NPC (para onde o modelo está olhando)
-        float npcRotationZ = a_npc->GetAngleZ() * (180.0f / 3.14159265358979323846f);
-
-        // 3. Subtrai a rotação do NPC para obter a direção Local (para onde ele anda em relação à própria frente)
-        float angle = moveAngleWorld - npcRotationZ;
-
-        // 4. Normaliza o ângulo para garantir que fique sempre entre 0 e 360 graus
-        while (angle < 0.0f) angle += 360.0f;
-        while (angle >= 360.0f) angle -= 360.0f;
-
-        //SKSE::log::info("[NPC Direcional] NPC: {:08X} | VelX: {:.2f} | VelY: {:.2f} | Angulo Local Calculado: {:.2f}", a_npc->GetFormID(), velocityX, velocityY, angle);
-
-        // Mapeia os ângulos convertidos para o seu sistema de Movesets (1 a 8)
-        if (angle > 337.5f || angle <= 22.5f) {
-            directionalState = 1;  // Norte (Frente)
-        }
-        else if (angle > 22.5f && angle <= 67.5f) {
-            directionalState = 2;  // Nordeste
-        }
-        else if (angle > 67.5f && angle <= 112.5f) {
-            directionalState = 3;  // Leste (Direita)
-        }
-        else if (angle > 112.5f && angle <= 157.5f) {
-            directionalState = 4;  // Sudeste
-        }
-        else if (angle > 157.5f && angle <= 202.5f) {
-            directionalState = 5;  // Sul (Trás)
-        }
-        else if (angle > 202.5f && angle <= 247.5f) {
-            directionalState = 6;  // Sudoeste
-        }
-        else if (angle > 247.5f && angle <= 292.5f) {
-            directionalState = 7;  // Oeste (Esquerda)
-        }
-        else if (angle > 292.5f && angle <= 337.5f) {
-            directionalState = 8;  // Noroeste
-        }
+        // Aplica na Animation Graph do NPC
+        a_npc->SetGraphVariableInt("DirecionalCycleMoveset", directionalState);
     }
-    else {
-        // Se a velocidade ou a intenção de movimento for zero
-        //SKSE::log::info("[NPC Direcional] NPC: {:08X} | Estado: PARADO (IsMoving == false)", a_npc->GetFormID());
+    catch (const std::exception& e) {
+        SKSE::log::error("[NPC Direcional] Excecao ao atualizar NPC {:08X}: {}", a_npc->GetFormID(), e.what());
     }
-
-    // Aplica na Animation Graph do NPC
-    a_npc->SetGraphVariableInt("DirecionalCycleMoveset", directionalState);
+    catch (...) {
+        SKSE::log::error("[NPC Direcional] Excecao desconhecida ao atualizar NPC {:08X}.", a_npc->GetFormID());
+    }
 }
 
 RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>* a_eventSource)
@@ -585,16 +594,22 @@ void Sink::NpcCombatTracker::RegisterSinksForExistingCombatants()
 
 void Sink::ScheduleSinkRegistration(RE::Actor* actor, int attempts)
 {
+    if (!actor) {
+        return;
+    }
+
     if (attempts > 20) {
         SKSE::log::critical("[Actor3DLoadEventHandler] Desistindo após {} tentativas para o ator {:08X}.", attempts, actor->GetFormID());
         return;
     }
 
-    std::thread([actor, attempts]() {
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    auto actorHandle = actor->CreateRefHandle();
 
-        SKSE::GetTaskInterface()->AddTask([actor, attempts]() {
-            if (!actor) return;
+    Utils::DelayedDispatcher::Get().PostDelayed(std::chrono::milliseconds(100), [actorHandle, attempts]() {
+        SKSE::GetTaskInterface()->AddTask([actorHandle, attempts]() {
+            if (!actorHandle || !actorHandle.get()) return;
+
+            auto actor = actorHandle.get();
             auto ui = RE::UI::GetSingleton();
             if (ui && (ui->IsMenuOpen(RE::MainMenu::MENU_NAME) || ui->IsMenuOpen(RE::LoadingMenu::MENU_NAME))) {
                 return;
@@ -604,21 +619,21 @@ void Sink::ScheduleSinkRegistration(RE::Actor* actor, int attempts)
 
             if (graphManager) {
                 if (actor->IsPlayerRef()) {
-                    Sink::NpcCombatTracker::UnregisterSink(actor);
-                    Sink::NpcCombatTracker::RegisterSink(actor);
+                    Sink::NpcCombatTracker::UnregisterSink(actor.get());
+                    Sink::NpcCombatTracker::RegisterSink(actor.get());
                 }
                 else {
-                    Sink::NpcCombatTracker::UnregisterSink(actor);
+                    Sink::NpcCombatTracker::UnregisterSink(actor.get());
                     if (!OARConverterUI::NPCOnlyCombat || actor->IsInCombat()) {
-                        Sink::NpcCombatTracker::RegisterSink(actor);
+                        Sink::NpcCombatTracker::RegisterSink(actor.get());
                     }
                 }
             }
             else {
-                ScheduleSinkRegistration(actor, attempts + 1);
+                ScheduleSinkRegistration(actor.get(), attempts + 1);
             }
-            });
-        }).detach();
+        });
+    });
 }
 
 RE::BSEventNotifyControl Sink::PC3DLoadEventHandler::ProcessEvent(const RE::TESObjectLoadedEvent* a_event, RE::BSTEventSource<RE::TESObjectLoadedEvent>*)
