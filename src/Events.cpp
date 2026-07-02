@@ -242,6 +242,40 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
 
 void Sink::InputListener::UpdateDirectionalState()
 {
+    auto checkOSKey = [](std::uint32_t dik_code) -> bool {
+        UINT vk = MapVirtualKeyA(dik_code, 3 /* MAPVK_VSC_TO_VK_EX */);
+        if (vk == 0) {
+            return false;
+        }
+
+        return (GetAsyncKeyState(vk) & 0x8000) != 0;
+    };
+
+    auto* userEvents = RE::UserEvents::GetSingleton();
+    auto* controlMap = RE::ControlMap::GetSingleton();
+    if (userEvents && controlMap) {
+        auto syncMappedKeyboardEvent = [controlMap, &checkOSKey](const RE::BSFixedString& a_event, bool& a_state) {
+            auto mappedKey = controlMap->GetMappedKey(a_event, RE::INPUT_DEVICE::kKeyboard);
+            if (mappedKey == RE::ControlMap::kInvalid || mappedKey == 0xFF) {
+                return;
+            }
+
+            a_state = checkOSKey(mappedKey);
+        };
+
+        syncMappedKeyboardEvent(userEvents->forward, w_pressed);
+        syncMappedKeyboardEvent(userEvents->back, s_pressed);
+        syncMappedKeyboardEvent(userEvents->strafeLeft, a_pressed);
+        syncMappedKeyboardEvent(userEvents->strafeRight, d_pressed);
+    }
+
+    ls_pressed = checkOSKey(0x2A); // Left Shift
+    q_pressed = checkOSKey(0x10);  // Q
+    e_pressed = checkOSKey(0x12);  // E
+    la_pressed = checkOSKey(0x38); // Left Alt
+    z_pressed = checkOSKey(0x2C);  // Z
+    x_pressed = checkOSKey(0x2D);  // X
+
     int directionalState = 0;
 
     if (OARConverterUI::DirectionalMode) {

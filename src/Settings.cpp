@@ -271,14 +271,18 @@ namespace OARConverterUI {
     }
 
     // --- HELPER: Converte o caminho para UTF-8 de forma segura para usar no log do SKSE ---
-    std::string PathToLogString(const fs::path& p) {
+    std::string PathToUtf8String(const fs::path& p) {
         try {
-            auto u8 = p.u8string();
-            return std::string(reinterpret_cast<const char*>(u8.c_str()));
+            auto u8 = p.generic_u8string();
+            return std::string(reinterpret_cast<const char*>(u8.data()), u8.size());
         }
         catch (...) {
             return "Caminho com caracteres ilegiveis";
         }
+    }
+
+    std::string PathToLogString(const fs::path& p) {
+        return PathToUtf8String(p);
     }
 
     // 5. Processamento do arquivo OAR (Agora armazena na memória antes de escrever no disco)
@@ -379,39 +383,47 @@ namespace OARConverterUI {
             return;
         }
 
-        fs::path exportDir = "Data/export";
-        fs::create_directories(exportDir); // Garante que a pasta existe
+        try {
+            fs::path exportDir = "Data/export";
+            fs::create_directories(exportDir); // Garante que a pasta existe
 
-        std::string zipPath = (exportDir / "DirectionalConverted.zip").string();
+            std::string zipPath = PathToUtf8String(exportDir / "DirectionalConverted.zip");
 
-        mz_zip_archive zip_archive;
-        memset(&zip_archive, 0, sizeof(zip_archive));
+            mz_zip_archive zip_archive;
+            memset(&zip_archive, 0, sizeof(zip_archive));
 
-        if (!mz_zip_writer_init_file(&zip_archive, zipPath.c_str(), 0)) {
-            SKSE::log::error("Export OAR: Falha ao inicializar arquivo ZIP em {}", zipPath);
-            return;
-        }
-
-        for (const auto& file : convertedFiles) {
-            std::string sourcePath = file.originalPath.string();
-
-            // O arquivo já deve ter um path como "Data\meshes\...", ajustamos apenas as barras
-            std::string internalZipPath = sourcePath;
-            std::replace(internalZipPath.begin(), internalZipPath.end(), '\\', '/');
-
-            // USANDO mz_zip_writer_add_mem PARA LER A STRING DA MEMÓRIA DIRETO PARA O ZIP
-            if (!mz_zip_writer_add_mem(&zip_archive, internalZipPath.c_str(), file.modifiedContent.data(), file.modifiedContent.size(), MZ_BEST_COMPRESSION)) {
-                SKSE::log::error("Export OAR: Falha ao adicionar arquivo {} ao ZIP", internalZipPath);
+            if (!mz_zip_writer_init_file(&zip_archive, zipPath.c_str(), 0)) {
+                SKSE::log::error("Export OAR: Falha ao inicializar arquivo ZIP em {}", zipPath);
+                return;
             }
-            else {
-                SKSE::log::info("Export OAR: Adicionado ao ZIP: {}", internalZipPath);
+
+            for (const auto& file : convertedFiles) {
+                std::string sourcePath = PathToUtf8String(file.originalPath);
+
+                // O arquivo já deve ter um path como "Data\meshes\...", ajustamos apenas as barras
+                std::string internalZipPath = sourcePath;
+                std::replace(internalZipPath.begin(), internalZipPath.end(), '\\', '/');
+
+                // USANDO mz_zip_writer_add_mem PARA LER A STRING DA MEMÓRIA DIRETO PARA O ZIP
+                if (!mz_zip_writer_add_mem(&zip_archive, internalZipPath.c_str(), file.modifiedContent.data(), file.modifiedContent.size(), MZ_BEST_COMPRESSION)) {
+                    SKSE::log::error("Export OAR: Falha ao adicionar arquivo {} ao ZIP", internalZipPath);
+                }
+                else {
+                    SKSE::log::info("Export OAR: Adicionado ao ZIP: {}", internalZipPath);
+                }
             }
+
+            mz_zip_writer_finalize_archive(&zip_archive);
+            mz_zip_writer_end(&zip_archive);
+
+            SKSE::log::info("Exportacao OAR concluida com sucesso para: {}", zipPath);
         }
-
-        mz_zip_writer_finalize_archive(&zip_archive);
-        mz_zip_writer_end(&zip_archive);
-
-        SKSE::log::info("Exportacao OAR concluida com sucesso para: {}", zipPath);
+        catch (const std::exception& e) {
+            SKSE::log::error("Export OAR: excecao durante exportacao ZIP: {}", e.what());
+        }
+        catch (...) {
+            SKSE::log::error("Export OAR: excecao desconhecida durante exportacao ZIP.");
+        }
     }
 
     void SaveSettings() {
