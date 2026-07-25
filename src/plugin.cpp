@@ -5,23 +5,26 @@
 #include "InputManagerAPI.h"
 
 void OnMessage(SKSE::MessagingInterface::Message* message) {
+    if (message->type == InputManagerAPI::kMessage_ProvideAPI) {
+        InputManagerAPI::ReceiveAPI(message);
+        if (InputManagerAPI::_API) {
+            logger::info("API do Input Manager recebida via messaging");
+            OARConverterUI::RegisterAllInputs();
+            OARConverterUI::TweenPauseRegister();
+        }
+    }
+
     if (message->type == SKSE::MessagingInterface::kDataLoaded) {
         OARConverterUI::Register();
         Hooks::InstallWindowFocusHook();
-        if (GetModuleHandleW(L"TweenPause.dll")) {
-            TweenPause = true;
-            logger::info("TweenPause.dll founded");
+        InputManagerAPI::RequestAPIDirect();
+        if (InputManagerAPI::_API) {
+            logger::info("API do Input Manager conectada");
+            OARConverterUI::RegisterAllInputs();
+            OARConverterUI::TweenPauseRegister();
         }
         else {
-            TweenPause = false;
-            logger::info("TweenPause.dll not found.");
-        }
-        if (TweenPause) {
-            InputManagerAPI::RequestAPIDirect();
-            if (InputManagerAPI::_API) {
-                logger::info("API do Input Manager conectada");
-                Sink::TweenInputListener::Register();
-            }
+            InputManagerAPI::RequestAPI();
         }
         RE::ScriptEventSourceHolder::GetSingleton()->AddEventSink(Sink::PC3DLoadEventHandler::GetSingleton());
     }
@@ -41,6 +44,7 @@ SKSEPluginLoad(const SKSE::LoadInterface *skse) {
     SetupLog();
     logger::info("Plugin loaded");
     SKSE::Init(skse);
+    Sink::TweenInputListener::Register();
     SKSE::GetMessagingInterface()->RegisterListener(OnMessage);
     return true;
 }

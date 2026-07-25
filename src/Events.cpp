@@ -1,5 +1,6 @@
 ﻿#include "Events.h"
 #include "DelayedDispatcher.h"
+#include "InputManagerAPI.h"
 #include "Settings.h"
 #include <cmath>
 #include <exception>
@@ -128,6 +129,7 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
                     if (w_pressed || s_pressed || a_pressed || d_pressed || c_up || c_down || c_left || c_right) {
                         umaTeclaMudou = true;
                     }
+                    NotifyCameraActivity();
                 }
             }
         }
@@ -136,7 +138,7 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
 
             // 1. Sensibilidade reduzida: Exige mais arrasto físico do mouse.
             // Mude de 0.4f para 0.2f se ainda estiver muito rápido, ou 0.6f se ficar muito pesado.
-            float mouseSensitivity = 0.4f;
+            float mouseSensitivity = OARConverterUI::CameraSensitivity;
 
             mouseCamX += mouseEvent->mouseInputX * mouseSensitivity;
             mouseCamY -= mouseEvent->mouseInputY * mouseSensitivity;
@@ -152,7 +154,7 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
 
             // 3. Deadzone aumentada: O movimento só é validado após passar de 150.
             // Elimina esbarrões e movimentos curtos acidentais.
-            float deadzone = 150.0f;
+            float deadzone = OARConverterUI::CameraMinimumDistance;
 
             bool new_m_up = mouseCamY > deadzone;
             bool new_m_down = mouseCamY < -deadzone;
@@ -167,6 +169,7 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
                 umaTeclaMudou = true;
             }
             if (mouseEvent->mouseInputX != 0 || mouseEvent->mouseInputY != 0) {
+                NotifyCameraActivity();
                 if (w_pressed || s_pressed || a_pressed || d_pressed || c_up || c_down || c_left || c_right) {
                     umaTeclaMudou = true;
                 }
@@ -205,6 +208,7 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
                 }
 
                 bool new_ls = CheckOSKey(0x2A); // Left Shift
+                bool new_lc = CheckOSKey(0x1D); // Left Ctrl
                 bool new_q = CheckOSKey(0x10); // Q
                 bool new_e = CheckOSKey(0x12); // E
                 bool new_la = CheckOSKey(0x38); // Left Alt
@@ -212,7 +216,7 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
                 bool new_x = CheckOSKey(0x2D); // X
 
                 if (w_pressed != new_w || s_pressed != new_s || a_pressed != new_a || d_pressed != new_d ||
-                    ls_pressed != new_ls || q_pressed != new_q || e_pressed != new_e ||
+                    ls_pressed != new_ls || lc_pressed != new_lc || q_pressed != new_q || e_pressed != new_e ||
                     la_pressed != new_la || z_pressed != new_z || x_pressed != new_x)
                 {
                     w_pressed = new_w;
@@ -221,6 +225,7 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
                     d_pressed = new_d;
 
                     ls_pressed = new_ls;
+                    lc_pressed = new_lc;
                     q_pressed = new_q;
                     e_pressed = new_e;
                     la_pressed = new_la;
@@ -242,6 +247,10 @@ RE::BSEventNotifyControl Sink::InputListener::ProcessEvent(RE::InputEvent* const
 
 void Sink::InputListener::UpdateDirectionalState()
 {
+    if (auto* player = RE::PlayerCharacter::GetSingleton()) {
+        SyncExternalGraphState(player);
+    }
+
     auto checkOSKey = [](std::uint32_t dik_code) -> bool {
         UINT vk = MapVirtualKeyA(dik_code, 3 /* MAPVK_VSC_TO_VK_EX */);
         if (vk == 0) {
@@ -270,6 +279,7 @@ void Sink::InputListener::UpdateDirectionalState()
     }
 
     ls_pressed = checkOSKey(0x2A); // Left Shift
+    lc_pressed = checkOSKey(0x1D); // Left Ctrl
     q_pressed = checkOSKey(0x10);  // Q
     e_pressed = checkOSKey(0x12);  // E
     la_pressed = checkOSKey(0x38); // Left Alt
@@ -373,11 +383,26 @@ void Sink::InputListener::UpdateDirectionalState()
 
     // 3. PROCESSAMENTO DE TECLAS MODIFICADORAS EXTRA (Sempre ativas)
     bool out_ls = ls_pressed || rs_left;
+    bool out_lc = lc_pressed;
     bool out_la = la_pressed || rs_right;
     bool out_q = q_pressed || rs_down;
     bool out_e = e_pressed || rs_up;
     bool out_z = z_pressed;
     bool out_x = x_pressed;
+
+    if (OARConverterUI::UseInputManagerExtendedKeys && InputManagerAPI::_API) {
+        auto isManagedActive = [this](OARConverterUI::ExtendedKeySlot a_slot) {
+            return !activeManagedActions[static_cast<std::size_t>(a_slot)].empty();
+        };
+
+        out_ls = isManagedActive(OARConverterUI::ExtendedKeySlot::kLeftShift);
+        out_lc = isManagedActive(OARConverterUI::ExtendedKeySlot::kLeftCtrl);
+        out_la = isManagedActive(OARConverterUI::ExtendedKeySlot::kLeftAlt);
+        out_q = isManagedActive(OARConverterUI::ExtendedKeySlot::kQ);
+        out_e = isManagedActive(OARConverterUI::ExtendedKeySlot::kE);
+        out_z = isManagedActive(OARConverterUI::ExtendedKeySlot::kZ);
+        out_x = isManagedActive(OARConverterUI::ExtendedKeySlot::kX);
+    }
 
     // 4. PROCESSAMENTO DO MOVIMENTO DE CÂMERA (Sempre ativo, mouse ou analógico direito)
     bool CAM_FRENTE = rs_up || m_up;
@@ -396,11 +421,6 @@ void Sink::InputListener::UpdateDirectionalState()
     else if (CAM_TRAS)                    cameraMovementCMF = 5;
     else if (CAM_DIREITA)                 cameraMovementCMF = 3;
     else                                  cameraMovementCMF = 0;
-
-    if (cameraMovementCMF == 0) {
-        mouseCamX = 0.0f;
-        mouseCamY = 0.0f;
-    }
 
     static int lastLoggedDirectionalState = -1;
     static int lastLoggedCameraMovementCMF = -1;
@@ -446,21 +466,220 @@ void Sink::InputListener::UpdateDirectionalState()
         lastLoggedCRight = c_right;
     }
 
+    ApplyAndDispatchState(directionalState, cameraMovementCMF, out_ls, out_lc, out_la, out_q, out_e, out_z, out_x);
+}
+
+void Sink::InputListener::ApplyAndDispatchState(
+    int a_directionalState,
+    int a_cameraState,
+    bool a_leftShift,
+    bool a_leftCtrl,
+    bool a_leftAlt,
+    bool a_q,
+    bool a_e,
+    bool a_z,
+    bool a_x)
+{
     auto* player = RE::PlayerCharacter::GetSingleton();
-    if (player) {
-        player->SetGraphVariableInt("DirecionalCycleMoveset", directionalState);
-        player->SetGraphVariableInt("CameraMovementCMF", cameraMovementCMF);
-        player->SetGraphVariableBool("DMKLeftShift", out_ls);
-        player->SetGraphVariableBool("DMKLeftAlt", out_la);
-        player->SetGraphVariableBool("DMKQ", out_q);
-        player->SetGraphVariableBool("DMKE", out_e);
-        player->SetGraphVariableBool("DMKZ", out_z);
-        player->SetGraphVariableBool("DMKX", out_x);
+    if (!player) {
+        return;
+    }
+
+    player->SetGraphVariableInt("DirecionalCycleMoveset", a_directionalState);
+    player->SetGraphVariableInt("CameraMovementCMF", a_cameraState);
+    player->SetGraphVariableBool("DMKLeftShift", a_leftShift);
+    player->SetGraphVariableBool("DMKLeftCtrl", a_leftCtrl);
+    player->SetGraphVariableBool("DMKLeftAlt", a_leftAlt);
+    player->SetGraphVariableBool("DMKQ", a_q);
+    player->SetGraphVariableBool("DMKE", a_e);
+    player->SetGraphVariableBool("DMKZ", a_z);
+    player->SetGraphVariableBool("DMKX", a_x);
+
+    lastWrittenDirectionalState = a_directionalState;
+    lastWrittenCameraState = a_cameraState;
+
+    DispatchUpdate("Direcional", a_directionalState, lastDispatchedDirectionalState);
+    DispatchUpdate("Camera", a_cameraState, lastDispatchedCameraState);
+    DispatchUpdate("LeftShift", a_leftShift ? 1 : 0, lastDispatchedLeftShift);
+    DispatchUpdate("LeftCtrl", a_leftCtrl ? 1 : 0, lastDispatchedLeftCtrl);
+    DispatchUpdate("LeftAlt", a_leftAlt ? 1 : 0, lastDispatchedLeftAlt);
+    DispatchUpdate("Q", a_q ? 1 : 0, lastDispatchedQ);
+    DispatchUpdate("E", a_e ? 1 : 0, lastDispatchedE);
+    DispatchUpdate("Z", a_z ? 1 : 0, lastDispatchedZ);
+    DispatchUpdate("X", a_x ? 1 : 0, lastDispatchedX);
+}
+
+void Sink::InputListener::DispatchUpdate(const char* a_type, int a_value, int& a_previousValue)
+{
+    if (a_previousValue == a_value) {
+        return;
+    }
+
+    auto* eventSource = SKSE::GetModCallbackEventSource();
+    if (!eventSource) {
+        SKSE::log::error("[DMKUpdate] Event source unavailable. type={} value={}", a_type, a_value);
+        return;
+    }
+
+    SKSE::ModCallbackEvent event{
+        RE::BSFixedString("DMKUpdate"),
+        RE::BSFixedString(a_type),
+        static_cast<float>(a_value),
+        nullptr
+    };
+    eventSource->SendEvent(&event);
+    a_previousValue = a_value;
+    SKSE::log::info("[DMKUpdate] Sent type={} value={}", a_type, a_value);
+}
+
+void Sink::InputListener::SyncExternalGraphState(RE::PlayerCharacter* a_player)
+{
+    std::int32_t graphDirectionalState = 0;
+    if (lastWrittenDirectionalState >= 0 &&
+        a_player->GetGraphVariableInt("DirecionalCycleMoveset", graphDirectionalState) &&
+        graphDirectionalState != lastWrittenDirectionalState) {
+        lastWrittenDirectionalState = graphDirectionalState;
+        DispatchUpdate("Direcional", graphDirectionalState, lastDispatchedDirectionalState);
+    }
+
+    std::int32_t graphCameraState = 0;
+    if (lastWrittenCameraState >= 0 &&
+        a_player->GetGraphVariableInt("CameraMovementCMF", graphCameraState) &&
+        graphCameraState != lastWrittenCameraState) {
+        lastWrittenCameraState = graphCameraState;
+        DispatchUpdate("Camera", graphCameraState, lastDispatchedCameraState);
+
+        if (graphCameraState == 0) {
+            CancelCameraResetTimer();
+            mouseCamX = 0.0f;
+            mouseCamY = 0.0f;
+            m_up = false;
+            m_down = false;
+            m_left = false;
+            m_right = false;
+            rs_up = false;
+            rs_down = false;
+            rs_left = false;
+            rs_right = false;
+        }
+    }
+}
+
+void Sink::InputListener::NotifyCameraActivity()
+{
+    if (!OARConverterUI::EnableCameraAutoReset ||
+        (!m_up && !m_down && !m_left && !m_right &&
+         !rs_up && !rs_down && !rs_left && !rs_right)) {
+        return;
+    }
+
+    const auto delay = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::duration<float>(
+            std::clamp(OARConverterUI::CameraResetDelaySeconds, 0.05f, 10.0f)));
+    cameraResetDeadline = std::chrono::steady_clock::now() + delay;
+
+    if (!cameraResetCheckScheduled) {
+        cameraResetCheckScheduled = true;
+        ScheduleCameraResetCheck(delay, cameraResetGeneration);
+    }
+}
+
+void Sink::InputListener::ScheduleCameraResetCheck(
+    std::chrono::milliseconds a_delay,
+    std::uint64_t a_generation)
+{
+    Utils::DelayedDispatcher::Get().PostDelayed(a_delay, [a_generation]() {
+        if (auto* taskInterface = SKSE::GetTaskInterface()) {
+            taskInterface->AddTask([a_generation]() {
+                InputListener::GetSingleton()->HandleCameraResetCheck(a_generation);
+            });
+        }
+    });
+}
+
+void Sink::InputListener::HandleCameraResetCheck(std::uint64_t a_generation)
+{
+    if (a_generation != cameraResetGeneration) {
+        return;
+    }
+
+    if (!OARConverterUI::EnableCameraAutoReset) {
+        cameraResetCheckScheduled = false;
+        return;
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now < cameraResetDeadline) {
+        const auto remaining = std::max(
+            std::chrono::duration_cast<std::chrono::milliseconds>(cameraResetDeadline - now),
+            std::chrono::milliseconds(1));
+        ScheduleCameraResetCheck(remaining, a_generation);
+        return;
+    }
+
+    cameraResetCheckScheduled = false;
+    ++cameraResetGeneration;
+    mouseCamX = 0.0f;
+    mouseCamY = 0.0f;
+    m_up = false;
+    m_down = false;
+    m_left = false;
+    m_right = false;
+    rs_up = false;
+    rs_down = false;
+    rs_left = false;
+    rs_right = false;
+    UpdateDirectionalState();
+}
+
+void Sink::InputListener::CancelCameraResetTimer()
+{
+    ++cameraResetGeneration;
+    cameraResetCheckScheduled = false;
+}
+
+void Sink::InputListener::RefreshCameraResetTimer()
+{
+    CancelCameraResetTimer();
+    NotifyCameraActivity();
+}
+
+void Sink::InputListener::HandleInputManagerAction(int a_actionID, bool a_isPressed)
+{
+    if (!OARConverterUI::UseInputManagerExtendedKeys) {
+        return;
+    }
+
+    bool changed = false;
+    for (std::size_t i = 0; i < OARConverterUI::ExtendedKeyCount; ++i) {
+        const auto& configuredActions = OARConverterUI::ExtendedKeyActionIDs[i];
+        if (std::find(configuredActions.begin(), configuredActions.end(), a_actionID) == configuredActions.end()) {
+            continue;
+        }
+
+        if (a_isPressed) {
+            changed |= activeManagedActions[i].insert(a_actionID).second;
+        }
+        else {
+            changed |= activeManagedActions[i].erase(a_actionID) > 0;
+        }
+    }
+
+    if (changed) {
+        UpdateDirectionalState();
+    }
+}
+
+void Sink::InputListener::ResetManagedExtendedInputs()
+{
+    for (auto& activeActions : activeManagedActions) {
+        activeActions.clear();
     }
 }
 
 void Sink::InputListener::ResetInputState()
 {
+    CancelCameraResetTimer();
     w_pressed = false;
     a_pressed = false;
     s_pressed = false;
@@ -489,23 +708,15 @@ void Sink::InputListener::ResetInputState()
     m_right = false;
 
     ls_pressed = false;
+    lc_pressed = false;
     q_pressed = false;
     e_pressed = false;
     la_pressed = false;
     z_pressed = false;
     x_pressed = false;
 
-    auto* player = RE::PlayerCharacter::GetSingleton();
-    if (player) {
-        player->SetGraphVariableInt("DirecionalCycleMoveset", 0);
-        player->SetGraphVariableInt("CameraMovementCMF", 0);
-        player->SetGraphVariableBool("DMKLeftShift", false);
-        player->SetGraphVariableBool("DMKLeftAlt", false);
-        player->SetGraphVariableBool("DMKQ", false);
-        player->SetGraphVariableBool("DMKE", false);
-        player->SetGraphVariableBool("DMKZ", false);
-        player->SetGraphVariableBool("DMKX", false);
-    }
+    ResetManagedExtendedInputs();
+    ApplyAndDispatchState(0, 0, false, false, false, false, false, false, false);
 }
 
 RE::BSEventNotifyControl Sink::TweenInputListener::ProcessEvent(const SKSE::ModCallbackEvent* a_event, RE::BSTEventSource<SKSE::ModCallbackEvent>*)
@@ -514,27 +725,38 @@ RE::BSEventNotifyControl Sink::TweenInputListener::ProcessEvent(const SKSE::ModC
 
     std::string_view eventName = a_event->eventName.c_str();
 
-    // strArg contém a string enviada pela sua função SendActionTriggeredEvent (ex: "Forward")
-    std::string_view actionName = a_event->strArg.c_str();
+    if (eventName == "TweenPauseReady") {
+        InputManagerAPI::RequestAPIDirect();
+        if (InputManagerAPI::_API) {
+            OARConverterUI::RegisterAllInputs();
+            OARConverterUI::TweenPauseRegister();
+            SKSE::log::info("TweenPauseReady recebido; controles enviados ao Tween Pause.");
+        }
+        return RE::BSEventNotifyControl::kContinue;
+    }
 
-    bool mudouAlgo = false;
+    if (eventName == "DMKUpdate") {
+        SKSE::log::info(
+            "[DMKUpdate] Received type={} value={}",
+            a_event->strArg.c_str(),
+            static_cast<int>(a_event->numArg));
+        return RE::BSEventNotifyControl::kContinue;
+    }
 
+    if (eventName == "TweenPause_ControlUpdated") {
+        if (OARConverterUI::HandleTweenPauseControlUpdate(a_event->strArg.c_str())) {
+            InputListener::GetSingleton()->ResetManagedExtendedInputs();
+            InputListener::GetSingleton()->ForceDirectionalUpdate();
+        }
+        return RE::BSEventNotifyControl::kContinue;
+    }
+
+    const int actionID = static_cast<int>(a_event->numArg);
     if (eventName == "InputManager_ActionTriggered") {
-        //if (actionName == "Forward") { vw_pressed = true; mudouAlgo = true; }
-        //else if (actionName == "Back") { vs_pressed = true; mudouAlgo = true; }
-        //else if (actionName == "Left") { va_pressed = true; mudouAlgo = true; }
-        //else if (actionName == "Right") { vd_pressed = true; mudouAlgo = true; }
+        InputListener::GetSingleton()->HandleInputManagerAction(actionID, true);
     }
     else if (eventName == "InputManager_ActionReleased") {
-        //if (actionName == "Forward") { vw_pressed = false; mudouAlgo = true; }
-        //else if (actionName == "Back") { vs_pressed = false; mudouAlgo = true; }
-        //else if (actionName == "Left") { va_pressed = false; mudouAlgo = true; }
-        //else if (actionName == "Right") { vd_pressed = false; mudouAlgo = true; }
-    }
-
-    if (mudouAlgo) {
-        // Se uma tecla virtual foi apertada, pedimos para o InputListener principal recalcular o direcional
-        InputListener::GetSingleton()->ForceDirectionalUpdate();
+        InputListener::GetSingleton()->HandleInputManagerAction(actionID, false);
     }
 
     return RE::BSEventNotifyControl::kContinue;

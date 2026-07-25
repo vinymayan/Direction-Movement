@@ -1,11 +1,13 @@
 ﻿#pragma once
+#include <array>
+#include <chrono>
+#include <set>
 #include <shared_mutex>
-
-static bool TweenPause = false;
 
 namespace Sink {
     // Variaveis de estado globais de input (para nao precisar mexer no seu Events.h)
     static bool ls_pressed = false; // Left Shift (0x2A)
+    static bool lc_pressed = false; // Left Ctrl (0x1D)
     static bool q_pressed = false;  // Q (0x10)
     static bool e_pressed = false;  // E (0x12)
     static bool la_pressed = false; // Left Alt (0x38)
@@ -43,9 +45,15 @@ namespace Sink {
         }
 
         static void Register() {
+            static bool registered = false;
+            if (registered) {
+                return;
+            }
+
             auto eventSource = SKSE::GetModCallbackEventSource();
             if (eventSource) {
                 eventSource->AddEventSink(GetSingleton());
+                registered = true;
                 SKSE::log::info("[Prisma] Listener do Input Manager Registrado e aguardando comandos!");
             }
         }
@@ -68,6 +76,9 @@ namespace Sink {
         void ForceDirectionalUpdate() { UpdateDirectionalState(); }
         void UpdateDirectionalState();
         void ResetInputState();
+        void HandleInputManagerAction(int a_actionID, bool a_isPressed);
+        void ResetManagedExtendedInputs();
+        void RefreshCameraResetTimer();
     protected:
 
     private:
@@ -84,6 +95,41 @@ namespace Sink {
         bool c_left = false;
         bool c_down = false;
         bool c_right = false;
+
+        void ApplyAndDispatchState(
+            int a_directionalState,
+            int a_cameraState,
+            bool a_leftShift,
+            bool a_leftCtrl,
+            bool a_leftAlt,
+            bool a_q,
+            bool a_e,
+            bool a_z,
+            bool a_x);
+        void SyncExternalGraphState(RE::PlayerCharacter* a_player);
+        void DispatchUpdate(const char* a_type, int a_value, int& a_previousValue);
+        void NotifyCameraActivity();
+        void ScheduleCameraResetCheck(std::chrono::milliseconds a_delay, std::uint64_t a_generation);
+        void HandleCameraResetCheck(std::uint64_t a_generation);
+        void CancelCameraResetTimer();
+
+        int lastDispatchedDirectionalState = -1;
+        int lastDispatchedCameraState = -1;
+        int lastWrittenDirectionalState = -1;
+        int lastWrittenCameraState = -1;
+        int lastDispatchedLeftShift = -1;
+        int lastDispatchedLeftCtrl = -1;
+        int lastDispatchedLeftAlt = -1;
+        int lastDispatchedQ = -1;
+        int lastDispatchedE = -1;
+        int lastDispatchedZ = -1;
+        int lastDispatchedX = -1;
+        bool cameraResetCheckScheduled = false;
+        std::uint64_t cameraResetGeneration = 0;
+        std::chrono::steady_clock::time_point cameraResetDeadline{};
+
+        static constexpr std::size_t kExtendedKeyCount = 7;
+        std::array<std::set<int>, kExtendedKeyCount> activeManagedActions;
     };
 
     static void ScheduleSinkRegistration(RE::Actor* actor, int attempts);

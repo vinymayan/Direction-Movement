@@ -1,17 +1,84 @@
 ﻿#include "Settings.h"
+#include "Events.h"
+#include "InputManagerAPI.h"
 namespace ImGui = ImGuiMCP;
 
 namespace OARConverterUI {
-    const char* SETTINGS_PATH = "Data/SKSE/Plugins/DMK_Settings.json";
-    const char* LANG_PATH = "Data/SKSE/Plugins/DMK_Language.json";
+    constexpr const char* MOD_DIR = "Data/Viny Mods/DMK";
+    constexpr const char* EXPORT_DIR = "Data/Viny Mods/DMK/Export";
+    constexpr const char* LEGACY_DIR = "Data/Viny Mods/DMK/Legacy";
+    constexpr const char* SETTINGS_PATH = "Data/Viny Mods/DMK/Settings.json";
+    constexpr const char* LANG_PATH = "Data/Viny Mods/DMK/Language.json";
+    constexpr const char* EXPORT_PATH = "Data/Viny Mods/DMK/Export/DirectionalConverted.zip";
+    constexpr const char* OLD_SETTINGS_PATH = "Data/SKSE/Plugins/DMK_Settings.json";
+    constexpr const char* OLD_LANG_PATH = "Data/SKSE/Plugins/DMK_Language.json";
+    constexpr const char* OLD_EXPORT_PATH = "Data/export/DirectionalConverted.zip";
     static std::unordered_map<std::string, std::string> LangMap;
 
+    fs::path GetAvailableLegacyPath(const fs::path& a_source)
+    {
+        fs::path destination = fs::path(LEGACY_DIR) / a_source.filename();
+        for (int suffix = 1; fs::exists(destination); ++suffix) {
+            destination = fs::path(LEGACY_DIR) /
+                (a_source.stem().string() + "_" + std::to_string(suffix) + a_source.extension().string());
+        }
+        return destination;
+    }
+
+    void MoveLegacyFile(const fs::path& a_source, const fs::path& a_destination)
+    {
+        std::error_code ec;
+        if (!fs::exists(a_source, ec) || ec) return;
+
+        fs::path destination = a_destination;
+        if (fs::exists(destination, ec) && !ec) destination = GetAvailableLegacyPath(a_source);
+
+        fs::create_directories(destination.parent_path(), ec);
+        if (ec) {
+            SKSE::log::warn("[Settings] Falha ao criar pasta de migracao '{}': {}", destination.parent_path().string(), ec.message());
+            return;
+        }
+
+        fs::rename(a_source, destination, ec);
+        if (ec) {
+            ec.clear();
+            fs::copy_file(a_source, destination, fs::copy_options::none, ec);
+            if (!ec) {
+                std::error_code removeError;
+                fs::remove(a_source, removeError);
+                if (removeError) ec = removeError;
+            }
+        }
+
+        if (ec) {
+            SKSE::log::warn("[Settings] Falha ao migrar '{}' para '{}': {}", a_source.string(), destination.string(), ec.message());
+        }
+        else {
+            SKSE::log::info("[Settings] Arquivo legado migrado de '{}' para '{}'.", a_source.string(), destination.string());
+        }
+    }
+
+    void MigrateLegacyFiles()
+    {
+        static bool migrated = false;
+        if (migrated) return;
+        migrated = true;
+
+        MoveLegacyFile(OLD_SETTINGS_PATH, SETTINGS_PATH);
+        MoveLegacyFile(OLD_LANG_PATH, LANG_PATH);
+        MoveLegacyFile(OLD_EXPORT_PATH, EXPORT_PATH);
+    }
+
     void LoadLanguage() {
+        MigrateLegacyFiles();
         LangMap.clear();
         std::ifstream file(LANG_PATH, std::ios::binary);
         if (!file.is_open()) {
-            SKSE::log::warn("Não foi possível carregar DMK_Language.json. Usando textos padrões.");
-            return;
+            file.open(OLD_LANG_PATH, std::ios::binary);
+            if (!file.is_open()) {
+                SKSE::log::warn("Não foi possível carregar Language.json. Usando textos padrões.");
+                return;
+            }
         }
 
         std::stringstream buffer;
@@ -384,10 +451,10 @@ namespace OARConverterUI {
         }
 
         try {
-            fs::path exportDir = "Data/export";
+            fs::path exportDir = EXPORT_DIR;
             fs::create_directories(exportDir); // Garante que a pasta existe
 
-            std::string zipPath = PathToUtf8String(exportDir / "DirectionalConverted.zip");
+            std::string zipPath = PathToUtf8String(EXPORT_PATH);
 
             mz_zip_archive zip_archive;
             memset(&zip_archive, 0, sizeof(zip_archive));
@@ -426,13 +493,145 @@ namespace OARConverterUI {
         }
     }
 
+    void WriteActionIDs(rapidjson::Value& a_doc, rapidjson::Document::AllocatorType& a_alloc, const char* a_name, const std::vector<int>& a_ids)
+    {
+        rapidjson::Value values(rapidjson::kArrayType);
+        for (int id : a_ids) values.PushBack(id, a_alloc);
+        rapidjson::Value name;
+        name.SetString(a_name, a_alloc);
+        a_doc.AddMember(name, values, a_alloc);
+    }
+
+    void ReadActionIDs(const rapidjson::Value& a_doc, const char* a_name, std::vector<int>& a_ids)
+    {
+        if (!a_doc.HasMember(a_name) || !a_doc[a_name].IsArray()) return;
+        a_ids.clear();
+        for (const auto& value : a_doc[a_name].GetArray()) {
+            if (value.IsInt()) a_ids.push_back(value.GetInt());
+        }
+    }
+
+    void UnregisterActionList(const std::vector<int>& a_ids, const char* a_purpose)
+    {
+        if (!InputManagerAPI::_API) return;
+        for (int id : a_ids) {
+            InputManagerAPI::_API->UpdateListener(0, id, "Directional Movement Keys", a_purpose, false, nullptr, 0, nullptr, 0);
+        }
+    }
+
+    void RegisterAllInputs()
+    {
+        if (!InputManagerAPI::_API || !UseInputManagerExtendedKeys) return;
+        for (std::size_t i = 0; i < ExtendedKeyCount; ++i) {
+            for (int id : ExtendedKeyActionIDs[i]) {
+                InputManagerAPI::_API->UpdateListener(0, id, "Directional Movement Keys", ExtendedKeyLabels[i], true, nullptr, 0, nullptr, 0);
+            }
+        }
+    }
+
+    void UnregisterAllInputs()
+    {
+        if (!InputManagerAPI::_API) return;
+        for (std::size_t i = 0; i < ExtendedKeyCount; ++i) {
+            UnregisterActionList(ExtendedKeyActionIDs[i], ExtendedKeyLabels[i]);
+        }
+    }
+
+    void TweenPauseRegister()
+    {
+        if (!UseInputManagerExtendedKeys) return;
+        auto* dispatcher = SKSE::GetModCallbackEventSource();
+        if (!dispatcher) return;
+
+        for (std::size_t i = 0; i < ExtendedKeyCount; ++i) {
+            rapidjson::Document doc;
+            doc.SetObject();
+            auto& alloc = doc.GetAllocator();
+            doc.AddMember("tabId", "gameplay", alloc);
+            doc.AddMember("tabLabel", "Mods", alloc);
+            doc.AddMember("categoryId", "directionalMovementKeys", alloc);
+            doc.AddMember("categoryLabel", "Directional Movement Keys", alloc);
+
+            const std::string actionId = std::string("DMKExtended_") + ExtendedKeyIds[i];
+            rapidjson::Value actionIdValue;
+            actionIdValue.SetString(actionId.c_str(), alloc);
+            doc.AddMember("actionId", actionIdValue, alloc);
+            rapidjson::Value actionLabel;
+            actionLabel.SetString(ExtendedKeyLabels[i], alloc);
+            doc.AddMember("actionLabel", actionLabel, alloc);
+            doc.AddMember("acceptsMotion", false, alloc);
+
+            rapidjson::Value mappedIds(rapidjson::kArrayType);
+            for (int id : ExtendedKeyActionIDs[i]) {
+                rapidjson::Value bind(rapidjson::kObjectType);
+                bind.AddMember("id", id, alloc);
+                bind.AddMember("type", "action", alloc);
+                mappedIds.PushBack(bind, alloc);
+            }
+            doc.AddMember("mappedIds", mappedIds, alloc);
+
+            rapidjson::StringBuffer buffer;
+            rapidjson::Writer<rapidjson::StringBuffer> writer(buffer);
+            doc.Accept(writer);
+            SKSE::ModCallbackEvent event{ "TweenPause_RegisterControl", RE::BSFixedString(buffer.GetString()), 0.0f, nullptr };
+            dispatcher->SendEvent(&event);
+        }
+    }
+
+    bool HandleTweenPauseControlUpdate(const char* a_payload)
+    {
+        if (!a_payload || !UseInputManagerExtendedKeys) return false;
+        rapidjson::Document doc;
+        doc.Parse(a_payload);
+        if (doc.HasParseError() || !doc.IsObject() || !doc.HasMember("actionId") || !doc["actionId"].IsString()) return false;
+
+        const std::string_view actionId = doc["actionId"].GetString();
+        for (std::size_t i = 0; i < ExtendedKeyCount; ++i) {
+            const std::string expectedId = std::string("DMKExtended_") + ExtendedKeyIds[i];
+            if (actionId != expectedId) continue;
+
+            const auto oldActions = ExtendedKeyActionIDs[i];
+            std::vector<int> newActions;
+            if (doc.HasMember("mappedIds") && doc["mappedIds"].IsArray()) {
+                for (const auto& bind : doc["mappedIds"].GetArray()) {
+                    if (bind.IsObject() && bind.HasMember("actionID") && bind["actionID"].IsInt()) {
+                        newActions.push_back(bind["actionID"].GetInt());
+                    }
+                }
+            }
+
+            UnregisterActionList(oldActions, ExtendedKeyLabels[i]);
+            ExtendedKeyActionIDs[i] = std::move(newActions);
+            RegisterAllInputs();
+            SaveSettings();
+            return true;
+        }
+        return false;
+    }
+
     void SaveSettings() {
+        std::error_code directoryError;
+        fs::create_directories(MOD_DIR, directoryError);
+        if (directoryError) {
+            SKSE::log::error("[Settings] Falha ao criar '{}': {}", MOD_DIR, directoryError.message());
+            return;
+        }
+
         rapidjson::Document doc;
         doc.SetObject();
         auto& alloc = doc.GetAllocator();
 
         doc.AddMember("NPCOnlyCombat", NPCOnlyCombat, alloc);
         doc.AddMember("DirectionalMode", DirectionalMode, alloc);
+        doc.AddMember("UseInputManagerExtendedKeys", UseInputManagerExtendedKeys, alloc);
+        doc.AddMember("CameraSensitivity", CameraSensitivity, alloc);
+        doc.AddMember("CameraMinimumDistance", CameraMinimumDistance, alloc);
+        doc.AddMember("EnableCameraAutoReset", EnableCameraAutoReset, alloc);
+        doc.AddMember("CameraResetDelaySeconds", CameraResetDelaySeconds, alloc);
+        for (std::size_t i = 0; i < ExtendedKeyCount; ++i) {
+            const std::string name = std::string(ExtendedKeyIds[i]) + "ActionIDs";
+            WriteActionIDs(doc, alloc, name.c_str(), ExtendedKeyActionIDs[i]);
+        }
 
         FILE* fp = nullptr;
         fopen_s(&fp, SETTINGS_PATH, "wb");
@@ -446,8 +645,10 @@ namespace OARConverterUI {
     }
 
     void LoadSettings() {
+        MigrateLegacyFiles();
         FILE* fp = nullptr;
         fopen_s(&fp, SETTINGS_PATH, "rb");
+        if (!fp) fopen_s(&fp, OLD_SETTINGS_PATH, "rb");
         if (fp) {
             char readBuffer[65536];
             rapidjson::FileReadStream is(fp, readBuffer, sizeof(readBuffer));
@@ -457,7 +658,21 @@ namespace OARConverterUI {
 
             if (doc.IsObject()) {
                 if (doc.HasMember("NPCOnlyCombat")) NPCOnlyCombat = doc["NPCOnlyCombat"].GetBool();
-                if (doc.HasMember("DirectionalMode")) DirectionalMode = doc["DirectionalMode"].GetBool(); 
+                if (doc.HasMember("DirectionalMode")) DirectionalMode = doc["DirectionalMode"].GetBool();
+                if (doc.HasMember("UseInputManagerExtendedKeys") && doc["UseInputManagerExtendedKeys"].IsBool()) UseInputManagerExtendedKeys = doc["UseInputManagerExtendedKeys"].GetBool();
+                if (doc.HasMember("CameraSensitivity") && doc["CameraSensitivity"].IsNumber()) CameraSensitivity = std::clamp(doc["CameraSensitivity"].GetFloat(), 0.05f, 2.0f);
+                if (doc.HasMember("CameraMinimumDistance") && doc["CameraMinimumDistance"].IsNumber()) CameraMinimumDistance = std::clamp(doc["CameraMinimumDistance"].GetFloat(), 1.0f, 299.0f);
+                if (doc.HasMember("EnableCameraAutoReset") && doc["EnableCameraAutoReset"].IsBool()) EnableCameraAutoReset = doc["EnableCameraAutoReset"].GetBool();
+                if (doc.HasMember("CameraResetDelaySeconds") && doc["CameraResetDelaySeconds"].IsNumber()) {
+                    CameraResetDelaySeconds = std::clamp(doc["CameraResetDelaySeconds"].GetFloat(), 0.05f, 10.0f);
+                }
+                else if (doc.HasMember("CameraResetDelayMs") && doc["CameraResetDelayMs"].IsNumber()) {
+                    CameraResetDelaySeconds = std::clamp(doc["CameraResetDelayMs"].GetFloat() / 1000.0f, 0.05f, 10.0f);
+                }
+                for (std::size_t i = 0; i < ExtendedKeyCount; ++i) {
+                    const std::string name = std::string(ExtendedKeyIds[i]) + "ActionIDs";
+                    ReadActionIDs(doc, name.c_str(), ExtendedKeyActionIDs[i]);
+                }
             }
         }
     }
@@ -488,7 +703,7 @@ namespace OARConverterUI {
             ImGuiMCP::Spacing();
             ImGuiMCP::TextColored({ 0.4f, 1.0f, 0.4f, 1.0f }, "%s", GetLoc("menu.oar_success", "Conversion completed successfully! Check SKSE logs for details."));
             if (exportToZip) {
-                ImGuiMCP::TextColored({ 0.4f, 1.0f, 0.4f, 1.0f }, "%s", GetLoc("menu.oar_success_zip", "Zip created at Data/export/DirectionalConverted.zip (Original files untouched)"));
+                ImGuiMCP::TextColored({ 0.4f, 1.0f, 0.4f, 1.0f }, "%s", GetLoc("menu.oar_success_zip", "Zip created at Data/Viny Mods/Directional Movement Keys/Export/DirectionalConverted.zip (Original files untouched)"));
             }
         }
 
@@ -536,6 +751,362 @@ namespace OARConverterUI {
         }
     }
 
+    std::string ToLowerString(std::string a_value)
+    {
+        std::transform(a_value.begin(), a_value.end(), a_value.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+        return a_value;
+    }
+
+    int GetIndexFromID(int a_id, const int* a_ids, int a_count)
+    {
+        for (int i = 0; i < a_count; ++i) {
+            if (a_ids[i] == a_id) return i;
+        }
+        return 0;
+    }
+
+    bool SearchableCombo(const char* a_label, int* a_currentItem, const char* const a_items[], int a_count)
+    {
+        bool changed = false;
+        const char* preview = *a_currentItem >= 0 && *a_currentItem < a_count ? a_items[*a_currentItem] : GetLoc("common.none", "None");
+        if (ImGui::BeginCombo(a_label, preview)) {
+            static char search[128]{};
+            if (ImGui::IsWindowAppearing()) {
+                search[0] = '\0';
+                ImGui::SetKeyboardFocusHere();
+            }
+            ImGui::InputText(GetLoc("common.search_placeholder", "Filter..."), search, sizeof(search));
+            ImGui::Separator();
+
+            const std::string filter = ToLowerString(search);
+            for (int i = 0; i < a_count; ++i) {
+                if (!filter.empty() && ToLowerString(a_items[i]).find(filter) == std::string::npos) continue;
+                const bool selected = *a_currentItem == i;
+                if (ImGui::Selectable(a_items[i], selected)) {
+                    *a_currentItem = i;
+                    changed = true;
+                }
+                if (selected && ImGui::IsWindowAppearing()) ImGui::SetScrollHereY();
+            }
+            ImGui::EndCombo();
+        }
+        return changed;
+    }
+
+    const char* GetActionStateName(int a_action)
+    {
+        return a_action >= 0 && a_action < static_cast<int>(std::size(actionStateNames)) ? actionStateNames[a_action] : actionStateNames[0];
+    }
+
+    std::string GetDirectionalInputName(std::uint32_t a_key)
+    {
+        switch (a_key) {
+        case InputManagerAPI::VKEY_DIR_UP: return "Up";
+        case InputManagerAPI::VKEY_DIR_DOWN: return "Down";
+        case InputManagerAPI::VKEY_DIR_LEFT: return "Left";
+        case InputManagerAPI::VKEY_DIR_RIGHT: return "Right";
+        case InputManagerAPI::VKEY_DIR_UPRIGHT: return "Up-Right";
+        case InputManagerAPI::VKEY_DIR_UPLEFT: return "Up-Left";
+        case InputManagerAPI::VKEY_DIR_DOWNRIGHT: return "Down-Right";
+        case InputManagerAPI::VKEY_DIR_DOWNLEFT: return "Down-Left";
+        default: return {};
+        }
+    }
+
+    std::string GetPCInputName(std::uint32_t a_key)
+    {
+        if (auto directional = GetDirectionalInputName(a_key); !directional.empty()) return directional;
+
+        constexpr std::uint32_t mouseOffset = 256;
+        constexpr const char* mouseNames[] = {
+            "Mouse Left", "Mouse Right", "Mouse Middle", "Mouse 4", "Mouse 5",
+            "Mouse 6", "Mouse 7", "Mouse 8", "Mouse Wheel Up", "Mouse Wheel Down"
+        };
+        if (a_key >= mouseOffset && a_key < mouseOffset + std::size(mouseNames)) {
+            return mouseNames[a_key - mouseOffset];
+        }
+
+        char name[128]{};
+        const LONG keyNameParam = static_cast<LONG>(a_key << 16);
+        if (::GetKeyNameTextA(keyNameParam, name, static_cast<int>(std::size(name))) > 0) return name;
+        return "Key " + std::to_string(a_key);
+    }
+
+    std::string GetGamepadInputName(std::uint32_t a_key)
+    {
+        if (auto directional = GetDirectionalInputName(a_key); !directional.empty()) return directional;
+
+        for (std::size_t i = 0; i < std::size(gamepadKeyIDs); ++i) {
+            if (static_cast<std::uint32_t>(gamepadKeyIDs[i]) == a_key) return gamepadKeyNames[i];
+        }
+        return "Gamepad " + std::to_string(a_key);
+    }
+
+    void DrawActionTooltip(int a_actionID)
+    {
+        const auto info = InputManagerAPI::_API->GetActionInfo(a_actionID);
+        if (!info.isValid) {
+            ImGui::TextDisabled("%s", GetLoc("menu.no_info", "No information available."));
+            return;
+        }
+
+        const char* actionNames[] = { "Ignore", "Tap", "Hold", "Gesture", "Press" };
+        auto actionName = [&actionNames](int a_action) {
+            return a_action >= 0 && a_action < 5 ? actionNames[a_action] : "Unknown";
+        };
+        auto actionDescription = [&actionName](int a_action, int a_taps) {
+            std::string result = actionName(a_action);
+            if (a_action == 1) result += " x" + std::to_string(a_taps);
+            return result;
+        };
+
+        ImGui::TextColored({ 0.4f, 1.0f, 0.4f, 1.0f }, "%s", GetLoc("menu.input_details", "Input Details"));
+        ImGui::Separator();
+        ImGui::Text("%s: %d | %s: %s", GetLoc("common.id", "ID"), info.id, GetLoc("common.name", "Name"), info.name ? info.name : GetLoc("common.unnamed", "Unnamed"));
+        ImGui::Text("%s: %s (%s)", GetLoc("menu.pc_main_key", "PC Main Key"), GetPCInputName(info.pcMainKey).c_str(), actionDescription(info.pcMainAction, info.pcMainTapCount).c_str());
+        if (info.pcModifierKey != 0) {
+            const char* gestureName = info.pcModAction == 3 ? InputManagerAPI::_API->GetInputName(2, info.pcModifierKey) : nullptr;
+            const std::string modifier = info.pcModAction == 3 ? (gestureName ? gestureName : "Unknown Gesture") : GetPCInputName(info.pcModifierKey);
+            ImGui::Text("%s: %s (%s)", GetLoc("menu.pc_mod_key", "PC Modifier"), modifier.c_str(), actionDescription(info.pcModAction, info.pcModTapCount).c_str());
+        }
+        ImGui::Text("%s: %s (%s)", GetLoc("menu.pad_main_key", "Gamepad Main Key"), GetGamepadInputName(info.gamepadMainKey).c_str(), actionDescription(info.gamepadMainAction, info.gamepadMainTapCount).c_str());
+        if (info.gamepadModifierKey != 0) {
+            const char* gestureName = info.gamepadModAction == 3 ? InputManagerAPI::_API->GetInputName(2, info.gamepadModifierKey) : nullptr;
+            const std::string modifier = info.gamepadModAction == 3 ? (gestureName ? gestureName : "Unknown Gesture") : GetGamepadInputName(info.gamepadModifierKey);
+            ImGui::Text("%s: %s (%s)", GetLoc("menu.pad_mod_key", "Gamepad Modifier"), modifier.c_str(), actionDescription(info.gamepadModAction, info.gamepadModTapCount).c_str());
+        }
+        if (info.useCustomTimings) {
+            ImGui::Text("%s: %.2fs | %s: %.2fs", GetLoc("menu.tap_window", "Tap Window"), info.tapWindow, GetLoc("menu.hold", "Hold"), info.holdDuration);
+        }
+    }
+
+    void EditExtendedKeyActions(std::size_t a_slot)
+    {
+        auto& actions = ExtendedKeyActionIDs[a_slot];
+        const auto oldActions = actions;
+        bool changed = false;
+        static int editingActionID = -1;
+        static InputManagerAPI::ActionInfo editStaging{};
+        static bool showEditError = false;
+        bool openEditPopup = false;
+        const std::string editPopupId = std::string("EditAction_") + ExtendedKeyIds[a_slot];
+
+        ImGui::PushID(ExtendedKeyIds[a_slot]);
+        if (ImGui::CollapsingHeader(ExtendedKeyLabels[a_slot])) {
+            ImGui::Indent();
+            for (std::size_t i = 0; i < actions.size();) {
+                const int id = actions[i];
+                const char* name = InputManagerAPI::_API->GetInputName(0, id);
+                ImGui::Text("[Action] [%d] %s", id, name ? name : GetLoc("common.unnamed", "Unnamed"));
+                if (ImGui::IsItemHovered()) {
+                    ImGui::BeginTooltip();
+                    DrawActionTooltip(id);
+                    ImGui::EndTooltip();
+                }
+                ImGui::SameLine();
+                ImGui::PushID(static_cast<int>(i));
+                if (ImGui::Button(GetLoc("common.edit", "Edit"))) {
+                    editingActionID = id;
+                    editStaging = InputManagerAPI::_API->GetActionInfo(id);
+                    showEditError = false;
+                    openEditPopup = true;
+                }
+                ImGui::SameLine();
+                if (ImGui::Button("X")) {
+                    actions.erase(actions.begin() + static_cast<std::ptrdiff_t>(i));
+                    changed = true;
+                    ImGui::PopID();
+                    continue;
+                }
+                ImGui::PopID();
+                ++i;
+            }
+
+            if (openEditPopup) ImGui::OpenPopup(editPopupId.c_str());
+            if (ImGui::BeginPopup(editPopupId.c_str())) {
+                if (editingActionID >= 0 && editStaging.isValid) {
+                    ImGui::TextColored({ 0.4f, 1.0f, 0.4f, 1.0f }, "%s: %s",
+                        GetLoc("menu.editing_action", "Editing Action"),
+                        editStaging.name ? editStaging.name : GetLoc("common.unnamed", "Unnamed"));
+                    ImGui::Separator();
+
+                    auto drawMainActionCombo = [](const char* a_label, int& a_action) {
+                        if (ImGui::BeginCombo(a_label, GetActionStateName(a_action))) {
+                            for (int action = 0; action < static_cast<int>(std::size(actionStateNames)); ++action) {
+                                if (action == 3) continue;
+                                const bool selected = a_action == action;
+                                if (ImGui::Selectable(actionStateNames[action], selected)) a_action = action;
+                                if (selected) ImGui::SetItemDefaultFocus();
+                            }
+                            ImGui::EndCombo();
+                        }
+                    };
+                    auto drawModifierActionCombo = [](const char* a_label, int& a_action, int a_mainAction) {
+                        if (ImGui::BeginCombo(a_label, GetActionStateName(a_action))) {
+                            for (int action = 0; action < static_cast<int>(std::size(actionStateNames)); ++action) {
+                                if (action == 3 && a_mainAction != 2 && a_mainAction != 4) continue;
+                                const bool selected = a_action == action;
+                                if (ImGui::Selectable(actionStateNames[action], selected)) a_action = action;
+                                if (selected) ImGui::SetItemDefaultFocus();
+                            }
+                            ImGui::EndCombo();
+                        }
+                    };
+                    auto drawGestureCombo = [](const char* a_label, std::uint32_t& a_gesture) {
+                        const int count = static_cast<int>(InputManagerAPI::_API->GetInputCount(2));
+                        const int current = static_cast<int>(a_gesture);
+                        const char* preview = current >= 0 && current < count ? InputManagerAPI::_API->GetInputName(2, current) : GetLoc("common.none", "None");
+                        if (ImGui::BeginCombo(a_label, preview ? preview : GetLoc("common.none", "None"))) {
+                            for (int gesture = 0; gesture < count; ++gesture) {
+                                const char* name = InputManagerAPI::_API->GetInputName(2, gesture);
+                                const bool selected = current == gesture;
+                                if (ImGui::Selectable(name ? name : GetLoc("common.unnamed", "Unnamed"), selected)) a_gesture = static_cast<std::uint32_t>(gesture);
+                                if (selected) ImGui::SetItemDefaultFocus();
+                            }
+                            ImGui::EndCombo();
+                        }
+                    };
+                    auto drawStickCombo = [](const char* a_label, int& a_stick) {
+                        const char* sticks[] = { GetLoc("menu.left_stick", "Left Stick"), GetLoc("menu.right_stick", "Right Stick") };
+                        const char* preview = a_stick >= 0 && a_stick < 2 ? sticks[a_stick] : sticks[0];
+                        if (ImGui::BeginCombo(a_label, preview)) {
+                            for (int stick = 0; stick < 2; ++stick) {
+                                const bool selected = a_stick == stick;
+                                if (ImGui::Selectable(sticks[stick], selected)) a_stick = stick;
+                                if (selected) ImGui::SetItemDefaultFocus();
+                            }
+                            ImGui::EndCombo();
+                        }
+                    };
+
+                    const int pcKeyCount = static_cast<int>(std::size(pcKeyIDs));
+                    const int gamepadKeyCount = static_cast<int>(std::size(gamepadKeyIDs));
+
+                    ImGui::TextColored({ 0.7f, 0.7f, 1.0f, 1.0f }, "%s", GetLoc("menu.pc_settings_header", "--- PC Settings ---"));
+                    int pcMainIndex = GetIndexFromID(editStaging.pcMainKey, pcKeyIDs, pcKeyCount);
+                    if (SearchableCombo(GetLoc("menu.pc_main_key", "PC Main Key"), &pcMainIndex, pcKeyNames, pcKeyCount)) editStaging.pcMainKey = pcKeyIDs[pcMainIndex];
+                    drawMainActionCombo(GetLoc("menu.pc_main_action", "PC Main Action"), editStaging.pcMainAction);
+                    if (editStaging.pcMainAction == 1) {
+                        ImGui::SetNextItemWidth(120.0f);
+                        ImGui::InputInt(GetLoc("menu.pc_main_taps", "PC Main Taps"), &editStaging.pcMainTapCount);
+                    }
+
+                    if (editStaging.pcModAction == 3 && editStaging.pcMainAction != 2 && editStaging.pcMainAction != 4) editStaging.pcModAction = 0;
+                    drawModifierActionCombo(GetLoc("menu.pc_mod_action", "PC Modifier Action"), editStaging.pcModAction, editStaging.pcMainAction);
+                    if (editStaging.pcModAction == 3) {
+                        drawGestureCombo(GetLoc("menu.pc_gesture", "PC Gesture"), editStaging.pcModifierKey);
+                    }
+                    else {
+                        int pcModifierIndex = GetIndexFromID(editStaging.pcModifierKey, pcKeyIDs, pcKeyCount);
+                        if (SearchableCombo(GetLoc("menu.pc_mod_key", "PC Modifier Key"), &pcModifierIndex, pcKeyNames, pcKeyCount)) editStaging.pcModifierKey = pcKeyIDs[pcModifierIndex];
+                        if (editStaging.pcModAction == 1) {
+                            ImGui::SetNextItemWidth(120.0f);
+                            ImGui::InputInt(GetLoc("menu.pc_mod_taps", "PC Modifier Taps"), &editStaging.pcModTapCount);
+                        }
+                    }
+
+                    ImGui::Spacing();
+                    ImGui::TextColored({ 0.7f, 1.0f, 0.7f, 1.0f }, "%s", GetLoc("menu.pad_settings_header", "--- Gamepad Settings ---"));
+                    int gamepadMainIndex = GetIndexFromID(editStaging.gamepadMainKey, gamepadKeyIDs, gamepadKeyCount);
+                    if (SearchableCombo(GetLoc("menu.pad_main_key", "Gamepad Main Key"), &gamepadMainIndex, gamepadKeyNames, gamepadKeyCount)) editStaging.gamepadMainKey = gamepadKeyIDs[gamepadMainIndex];
+                    drawMainActionCombo(GetLoc("menu.pad_main_action", "Gamepad Main Action"), editStaging.gamepadMainAction);
+                    if (editStaging.gamepadMainAction == 1) {
+                        ImGui::SetNextItemWidth(120.0f);
+                        ImGui::InputInt(GetLoc("menu.pad_main_taps", "Gamepad Main Taps"), &editStaging.gamepadMainTapCount);
+                    }
+
+                    if (editStaging.gamepadModAction == 3 && editStaging.gamepadMainAction != 2 && editStaging.gamepadMainAction != 4) editStaging.gamepadModAction = 0;
+                    drawModifierActionCombo(GetLoc("menu.pad_mod_action", "Gamepad Modifier Action"), editStaging.gamepadModAction, editStaging.gamepadMainAction);
+                    if (editStaging.gamepadModAction == 3) {
+                        drawGestureCombo(GetLoc("menu.pad_gesture", "Gamepad Gesture"), editStaging.gamepadModifierKey);
+                        drawStickCombo(GetLoc("menu.pad_gesture_stick", "Gesture Stick"), editStaging.gamepadGestureStick);
+                    }
+                    else {
+                        int gamepadModifierIndex = GetIndexFromID(editStaging.gamepadModifierKey, gamepadKeyIDs, gamepadKeyCount);
+                        if (SearchableCombo(GetLoc("menu.pad_mod_key", "Gamepad Modifier Key"), &gamepadModifierIndex, gamepadKeyNames, gamepadKeyCount)) editStaging.gamepadModifierKey = gamepadKeyIDs[gamepadModifierIndex];
+                        if (editStaging.gamepadModAction == 1) {
+                            ImGui::SetNextItemWidth(120.0f);
+                            ImGui::InputInt(GetLoc("menu.pad_mod_taps", "Gamepad Modifier Taps"), &editStaging.gamepadModTapCount);
+                        }
+                    }
+
+                    ImGui::Separator();
+                    if (showEditError) {
+                        ImGui::TextColored({ 1.0f, 0.2f, 0.2f, 1.0f }, "%s", GetLoc("menu.save_error", "Error: Conflict detected or invalid input!"));
+                    }
+                    if (ImGui::Button(GetLoc("common.save", "Save"), { 120.0f, 0.0f })) {
+                        if (InputManagerAPI::_API->UpdateActionMapping(editingActionID, editStaging)) {
+                            showEditError = false;
+                            editingActionID = -1;
+                            TweenPauseRegister();
+                            ImGui::CloseCurrentPopup();
+                        }
+                        else {
+                            showEditError = true;
+                        }
+                    }
+                    ImGui::SameLine();
+                    if (ImGui::Button(GetLoc("common.cancel", "Cancel"), { 120.0f, 0.0f })) {
+                        editingActionID = -1;
+                        showEditError = false;
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                else {
+                    ImGui::TextDisabled("%s", GetLoc("menu.no_info", "No information available."));
+                }
+                ImGui::EndPopup();
+            }
+
+            const std::string popupId = std::string("AddAction_") + ExtendedKeyIds[a_slot];
+            if (ImGui::Button(GetLoc("menu.add_input", "+ Add Action"))) ImGui::OpenPopup(popupId.c_str());
+            if (ImGui::BeginPopup(popupId.c_str())) {
+                static char search[128] = "";
+                if (ImGui::IsWindowAppearing()) search[0] = '\0';
+                ImGui::InputText(GetLoc("common.search_placeholder", "Filter..."), search, sizeof(search));
+                ImGui::Separator();
+                ImGui::BeginChild("ActionList", { 360.0f, 220.0f }, true);
+
+                std::string filter = search;
+                std::transform(filter.begin(), filter.end(), filter.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                const auto count = InputManagerAPI::_API->GetInputCount(0);
+                for (int id = 0; id < static_cast<int>(count); ++id) {
+                    const char* name = InputManagerAPI::_API->GetInputName(0, id);
+                    std::string label = "[" + std::to_string(id) + "] " + (name ? name : GetLoc("common.unnamed", "Unnamed"));
+                    std::string searchable = label;
+                    std::transform(searchable.begin(), searchable.end(), searchable.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                    if (!filter.empty() && searchable.find(filter) == std::string::npos) continue;
+
+                    if (ImGui::Selectable(label.c_str(), false)) {
+                        if (std::find(actions.begin(), actions.end(), id) == actions.end()) {
+                            actions.push_back(id);
+                            changed = true;
+                        }
+                        ImGui::CloseCurrentPopup();
+                    }
+                    if (ImGui::IsItemHovered()) {
+                        ImGui::BeginTooltip();
+                        DrawActionTooltip(id);
+                        ImGui::EndTooltip();
+                    }
+                }
+                ImGui::EndChild();
+                ImGui::EndPopup();
+            }
+            ImGui::Unindent();
+        }
+        ImGui::PopID();
+
+        if (changed) {
+            UnregisterActionList(oldActions, ExtendedKeyLabels[a_slot]);
+            RegisterAllInputs();
+            SaveSettings();
+            TweenPauseRegister();
+            Sink::InputListener::GetSingleton()->ResetManagedExtendedInputs();
+            Sink::InputListener::GetSingleton()->ForceDirectionalUpdate();
+        }
+    }
+
     void MSettings()
     {
         bool changed = false;
@@ -553,6 +1124,107 @@ namespace OARConverterUI {
         }
         ImGuiMCP::TextWrapped("%s", GetLoc("menu.custom_360_desc", "Enables camera-relative calculations for 360 movement mods without requiring TDM API. Complex states (9 to 14) are disabled in this mode."));
         ImGuiMCP::Spacing();
+
+        ImGuiMCP::SetNextItemWidth(280.0f);
+        bool sensitivityChanged = ImGuiMCP::SliderFloat(GetLoc("menu.camera_sensitivity", "Camera Input Sensitivity"), &CameraSensitivity, 0.05f, 2.0f, "%.2f");
+        bool sensitivityHovered = ImGuiMCP::IsItemHovered();
+        ImGuiMCP::SameLine();
+        ImGuiMCP::SetNextItemWidth(270.0f);
+        sensitivityChanged |= ImGuiMCP::InputFloat("##CameraSensitivityInput", &CameraSensitivity, 0.01f, 0.10f, "%.2f");
+        sensitivityHovered |= ImGuiMCP::IsItemHovered();
+        if (sensitivityChanged) {
+            CameraSensitivity = std::clamp(CameraSensitivity, 0.05f, 2.0f);
+            changed = true;
+        }
+        if (sensitivityHovered) {
+            ImGuiMCP::SetTooltip("%s", GetLoc("menu.camera_sensitivity_hover", "Multiplier applied to mouse camera movement before determining a direction."));
+        }
+
+        int cameraMinimumDistanceInput = static_cast<int>(std::lround(CameraMinimumDistance));
+        ImGuiMCP::SetNextItemWidth(280.0f);
+        bool distanceChanged = ImGuiMCP::SliderFloat(GetLoc("menu.camera_minimum_distance", "Camera Minimum Distance"), &CameraMinimumDistance, 1.0f, 299.0f, "%.0f");
+        bool distanceHovered = ImGuiMCP::IsItemHovered();
+        if (distanceChanged) cameraMinimumDistanceInput = static_cast<int>(std::lround(CameraMinimumDistance));
+        ImGuiMCP::SameLine();
+        ImGuiMCP::SetNextItemWidth(270.0f);
+        if (ImGuiMCP::InputInt("##CameraMinimumDistanceInput", &cameraMinimumDistanceInput, 1, 10)) {
+            CameraMinimumDistance = static_cast<float>(std::clamp(cameraMinimumDistanceInput, 1, 299));
+            distanceChanged = true;
+        }
+        distanceHovered |= ImGuiMCP::IsItemHovered();
+        if (distanceChanged) {
+            changed = true;
+        }
+        if (distanceHovered) {
+            ImGuiMCP::SetTooltip("%s", GetLoc("menu.camera_minimum_distance_hover", "Minimum accumulated mouse movement required before CameraMovementCMF changes direction."));
+        }
+
+        bool cameraResetChanged = ImGuiMCP::Checkbox(
+            GetLoc("menu.camera_auto_reset", "Reset Camera Direction After Inactivity"),
+            &EnableCameraAutoReset);
+        if (ImGuiMCP::IsItemHovered()) {
+            ImGuiMCP::SetTooltip(
+                "%s",
+                GetLoc("menu.camera_auto_reset_hover", "Resets CameraMovementCMF to 0 when no camera input is received during the configured time."));
+        }
+
+        if (EnableCameraAutoReset) {
+            float cameraResetDelayInput = CameraResetDelaySeconds;
+            ImGuiMCP::SetNextItemWidth(280.0f);
+            bool resetDelayChanged = ImGuiMCP::SliderFloat(
+                GetLoc("menu.camera_reset_delay", "Camera Reset Delay (seconds)"),
+                &CameraResetDelaySeconds,
+                0.05f,
+                10.0f,
+                "%.2f");
+            bool resetDelayHovered = ImGuiMCP::IsItemHovered();
+            if (resetDelayChanged) cameraResetDelayInput = CameraResetDelaySeconds;
+            ImGuiMCP::SameLine();
+            ImGuiMCP::SetNextItemWidth(270.0f);
+            if (ImGuiMCP::InputFloat("##CameraResetDelayInput", &cameraResetDelayInput, 0.05f, 0.5f, "%.2f")) {
+                CameraResetDelaySeconds = std::clamp(cameraResetDelayInput, 0.05f, 10.0f);
+                resetDelayChanged = true;
+            }
+            resetDelayHovered |= ImGuiMCP::IsItemHovered();
+            if (resetDelayHovered) {
+                ImGuiMCP::SetTooltip(
+                    "%s",
+                    GetLoc("menu.camera_reset_delay_hover", "Seconds without mouse or right-stick camera input before CameraMovementCMF returns to 0."));
+            }
+            cameraResetChanged |= resetDelayChanged;
+        }
+
+        if (cameraResetChanged) {
+            Sink::InputListener::GetSingleton()->RefreshCameraResetTimer();
+            changed = true;
+        }
+        ImGuiMCP::Spacing();
+
+        if (InputManagerAPI::_API) {
+            const bool wasEnabled = UseInputManagerExtendedKeys;
+            if (ImGuiMCP::Checkbox(GetLoc("menu.input_manager_extended_keys", "Change Extended Keys with Input Manager"), &UseInputManagerExtendedKeys)) {
+                if (wasEnabled) {
+                    UnregisterAllInputs();
+                }
+                Sink::InputListener::GetSingleton()->ResetManagedExtendedInputs();
+                if (UseInputManagerExtendedKeys) {
+                    RegisterAllInputs();
+                    TweenPauseRegister();
+                }
+                Sink::InputListener::GetSingleton()->ForceDirectionalUpdate();
+                changed = true;
+            }
+            if (ImGuiMCP::IsItemHovered()) {
+                ImGuiMCP::SetTooltip("%s", GetLoc("menu.input_manager_extended_keys_hover", "Replaces physical extended-key and fixed gamepad detection with Input Manager Actions."));
+            }
+
+            if (UseInputManagerExtendedKeys) {
+                ImGuiMCP::Indent();
+                for (std::size_t i = 0; i < ExtendedKeyCount; ++i) EditExtendedKeyActions(i);
+                ImGuiMCP::Unindent();
+            }
+        }
+
         ImGuiMCP::Separator();
         ImGuiMCP::Spacing();
 
@@ -571,17 +1243,16 @@ namespace OARConverterUI {
 
     void Register()
     {
+        LoadLanguage();
+        LoadSettings();
+
         if (!SKSEMenuFramework::IsInstalled()) {
             return;
         }
 
-        // Carrega configurações e traduções antes de montar a UI
-        LoadLanguage();
-        LoadSettings();
-
         SKSEMenuFramework::SetSection("DMK");
-        SKSEMenuFramework::AddSectionItem(GetLoc("menu.legacy_converter", "Legacy Converter"), RenderMenu);
         SKSEMenuFramework::AddSectionItem(GetLoc("menu.settings", "Settings"), MSettings);
+        SKSEMenuFramework::AddSectionItem(GetLoc("menu.legacy_converter", "Legacy Converter"), RenderMenu);
         SKSE::log::info("OAR Converter UI & Settings Registered successfully.");
     }
 }
