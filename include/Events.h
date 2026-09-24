@@ -54,7 +54,7 @@ namespace Sink {
             if (eventSource) {
                 eventSource->AddEventSink(GetSingleton());
                 registered = true;
-                SKSE::log::info("[Prisma] Listener do Input Manager Registrado e aguardando comandos!");
+                SKSE::log::info("Listener do Input Manager Registrado e aguardando comandos!");
             }
         }
 

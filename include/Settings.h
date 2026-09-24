@@ -19,6 +19,8 @@
 
 namespace OARConverterUI {
 	inline bool NPCOnlyCombat = true;
+    inline bool NPCAttackDirectionAtWeaponSwing = false;
+    inline int NPCAttackDirectionFallback = 0;
     inline bool DirectionalMode = false;
     inline bool UseInputManagerExtendedKeys = false;
     inline float CameraSensitivity = 0.4f;

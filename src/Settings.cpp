@@ -622,6 +622,8 @@ namespace OARConverterUI {
         auto& alloc = doc.GetAllocator();
 
         doc.AddMember("NPCOnlyCombat", NPCOnlyCombat, alloc);
+        doc.AddMember("NPCAttackDirectionAtWeaponSwing", NPCAttackDirectionAtWeaponSwing, alloc);
+        doc.AddMember("NPCAttackDirectionFallback", std::clamp(NPCAttackDirectionFallback, 0, 8), alloc);
         doc.AddMember("DirectionalMode", DirectionalMode, alloc);
         doc.AddMember("UseInputManagerExtendedKeys", UseInputManagerExtendedKeys, alloc);
         doc.AddMember("CameraSensitivity", CameraSensitivity, alloc);
@@ -658,6 +660,15 @@ namespace OARConverterUI {
 
             if (doc.IsObject()) {
                 if (doc.HasMember("NPCOnlyCombat")) NPCOnlyCombat = doc["NPCOnlyCombat"].GetBool();
+                if (doc.HasMember("NPCAttackDirectionAtWeaponSwing") && doc["NPCAttackDirectionAtWeaponSwing"].IsBool()) {
+                    NPCAttackDirectionAtWeaponSwing = doc["NPCAttackDirectionAtWeaponSwing"].GetBool();
+                }
+                else if (doc.HasMember("NPCWarningUseWeaponSwing") && doc["NPCWarningUseWeaponSwing"].IsBool()) {
+                    NPCAttackDirectionAtWeaponSwing = doc["NPCWarningUseWeaponSwing"].GetBool();
+                }
+                if (doc.HasMember("NPCAttackDirectionFallback") && doc["NPCAttackDirectionFallback"].IsInt()) {
+                    NPCAttackDirectionFallback = std::clamp(doc["NPCAttackDirectionFallback"].GetInt(), 0, 8);
+                }
                 if (doc.HasMember("DirectionalMode")) DirectionalMode = doc["DirectionalMode"].GetBool();
                 if (doc.HasMember("UseInputManagerExtendedKeys") && doc["UseInputManagerExtendedKeys"].IsBool()) UseInputManagerExtendedKeys = doc["UseInputManagerExtendedKeys"].GetBool();
                 if (doc.HasMember("CameraSensitivity") && doc["CameraSensitivity"].IsNumber()) CameraSensitivity = std::clamp(doc["CameraSensitivity"].GetFloat(), 0.05f, 2.0f);
@@ -1233,6 +1244,17 @@ namespace OARConverterUI {
         ImGuiMCP::Spacing();
 
         if (ImGuiMCP::Checkbox(GetLoc("menu.npc_only_combat", "Evaluate NPC directional movement ONLY during combat"), &NPCOnlyCombat)) {
+            changed = true;
+        }
+        if (ImGuiMCP::Checkbox(
+                GetLoc("menu.npc_attack_direction_weapon_swing", "Resolve NPC attack at weaponSwing instead of preHitFrame"),
+                &NPCAttackDirectionAtWeaponSwing)) {
+            changed = true;
+        }
+        ImGuiMCP::SetNextItemWidth(280.0f);
+        if (ImGuiMCP::SliderInt(
+                GetLoc("menu.npc_attack_direction_fallback", "NPC attack direction when unknown (0 = keep unknown)"),
+                &NPCAttackDirectionFallback, 0, 8)) {
             changed = true;
         }
 

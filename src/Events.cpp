@@ -2,8 +2,297 @@
 #include "DelayedDispatcher.h"
 #include "InputManagerAPI.h"
 #include "Settings.h"
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <exception>
+#include <mutex>
+#include <optional>
+#include <string>
+#include <unordered_map>
+
+namespace
+{
+    constexpr char kAttackDirectionVariable[] = "AttackDirectionNPC";
+    constexpr char kAttackTelegraphEvent[] = "DMKAttackTelegraph";
+    constexpr float kMinimumSwingDistanceSquared = 16.0f;  // 4 game units
+    constexpr float kCardinalAxisRatio = 1.5f;
+    constexpr auto kAttackTrackingTimeout = std::chrono::seconds(10);
+
+    // AttackDirectionNPC values:
+    // 0 = none/unknown, 1 = right, 2 = left, 3 = up, 4 = down,
+    // 5 = upper-right, 6 = upper-left, 7 = lower-right, 8 = lower-left.
+    struct AttackTrackingState
+    {
+        std::optional<RE::NiPoint3> rightHandStart;
+        std::optional<RE::NiPoint3> leftHandStart;
+        std::uint64_t generation{ 0 };
+        bool directionResolved{ false };
+    };
+
+    std::unordered_map<RE::FormID, AttackTrackingState> g_attackTrackingStates;
+    std::mutex g_attackTrackingMutex;
+    std::uint64_t g_attackTrackingGeneration{ 0 };
+
+    std::string ToLower(std::string_view a_value)
+    {
+        std::string result(a_value);
+        std::ranges::transform(result, result.begin(), [](unsigned char a_character) {
+            return static_cast<char>(std::tolower(a_character));
+        });
+        return result;
+    }
+
+    RE::NiAVObject* FindFirstNode(RE::NiAVObject* a_root, std::initializer_list<const char*> a_names)
+    {
+        if (!a_root) {
+            return nullptr;
+        }
+
+        for (const auto* name : a_names) {
+            if (auto* node = a_root->GetObjectByName(RE::BSFixedString(name))) {
+                return node;
+            }
+        }
+        return nullptr;
+    }
+
+    std::optional<RE::NiPoint3> GetHandPositionInTorsoSpace(RE::Actor* a_actor, bool a_leftHand)
+    {
+        if (!a_actor || !a_actor->Is3DLoaded()) {
+            return std::nullopt;
+        }
+
+        auto* root = a_actor->Get3D(false);
+        if (!root) {
+            return std::nullopt;
+        }
+
+        auto* torso = FindFirstNode(root, {
+            "NPC Spine2 [Spn2]",
+            "NPC Spine1 [Spn1]",
+            "NPC Pelvis [Pelv]"
+        });
+        auto* hand = a_leftHand ?
+            FindFirstNode(root, { "NPC L Hand [LHnd]", "NPC L Forearm [LLar]" }) :
+            FindFirstNode(root, { "NPC R Hand [RHnd]", "NPC R Forearm [RLar]", "WEAPON" });
+
+        if (!torso || !hand) {
+            return std::nullopt;
+        }
+
+        return torso->world.Invert() * hand->world.translate;
+    }
+
+    int ClassifySwingOrigin(const RE::NiPoint3& a_start, const RE::NiPoint3& a_current)
+    {
+        // start-current points toward the side from which the weapon came. Using
+        // the inverse trajectory avoids classifying a right-to-left attack as left.
+        const auto originDirection = a_start - a_current;
+        if (originDirection.SqrLength() < kMinimumSwingDistanceSquared) {
+            return 0;
+        }
+
+        const float horizontal = std::abs(originDirection.x);
+        const float vertical = std::abs(originDirection.z);
+        const bool right = originDirection.x >= 0.0f;
+        const bool up = originDirection.z >= 0.0f;
+
+        if (horizontal > vertical * kCardinalAxisRatio) {
+            return right ? 1 : 2;
+        }
+        if (vertical > horizontal * kCardinalAxisRatio) {
+            return up ? 3 : 4;
+        }
+        if (right) {
+            return up ? 5 : 7;
+        }
+        return up ? 6 : 8;
+    }
+
+    bool DispatchAttackTelegraph(RE::Actor* a_actor, const char* a_phase, int a_direction)
+    {
+        if (!a_actor || !a_phase) {
+            return false;
+        }
+
+        auto* eventSource = SKSE::GetModCallbackEventSource();
+        if (!eventSource) {
+            SKSE::log::error(
+                "[DMKAttackTelegraph] Event source unavailable. actor={:08X} phase={} direction={}",
+                a_actor->GetFormID(), a_phase, a_direction);
+            return false;
+        }
+
+        // Protocol: eventName=DMKAttackTelegraph, strArg=Resolved|End,
+        // numArg=AttackDirectionNPC (0-8), sender=attacking NPC.
+        SKSE::ModCallbackEvent event{
+            RE::BSFixedString(kAttackTelegraphEvent),
+            RE::BSFixedString(a_phase),
+            static_cast<float>(a_direction),
+            a_actor
+        };
+        eventSource->SendEvent(&event);
+        SKSE::log::debug(
+            "[DMKAttackTelegraph] Sent actor={:08X} phase={} direction={}",
+            a_actor->GetFormID(), a_phase, a_direction);
+        return true;
+    }
+
+    void ResetAttackDirection(RE::Actor* a_actor)
+    {
+        if (!a_actor) {
+            return;
+        }
+
+        bool wasResolved = false;
+        {
+            std::scoped_lock lock(g_attackTrackingMutex);
+            const auto it = g_attackTrackingStates.find(a_actor->GetFormID());
+            if (it != g_attackTrackingStates.end()) {
+                wasResolved = it->second.directionResolved;
+                g_attackTrackingStates.erase(it);
+            }
+        }
+        a_actor->SetGraphVariableInt(kAttackDirectionVariable, 0);
+        if (wasResolved) {
+            DispatchAttackTelegraph(a_actor, "End", 0);
+        }
+    }
+
+    void ScheduleAttackTrackingTimeout(RE::Actor* a_actor, std::uint64_t a_generation)
+    {
+        const auto actorHandle = a_actor->CreateRefHandle();
+        const auto formID = a_actor->GetFormID();
+
+        Utils::DelayedDispatcher::Get().PostDelayed(kAttackTrackingTimeout, [actorHandle, formID, a_generation]() {
+            SKSE::GetTaskInterface()->AddTask([actorHandle, formID, a_generation]() {
+                bool wasResolved = false;
+                {
+                    std::scoped_lock lock(g_attackTrackingMutex);
+                    const auto it = g_attackTrackingStates.find(formID);
+                    if (it == g_attackTrackingStates.end() || it->second.generation != a_generation) {
+                        return;
+                    }
+                    wasResolved = it->second.directionResolved;
+                    g_attackTrackingStates.erase(it);
+                }
+
+                if (auto actorPtr = actorHandle.get()) {
+                    if (auto* actor = actorPtr->As<RE::Actor>()) {
+                        actor->SetGraphVariableInt(kAttackDirectionVariable, 0);
+                        if (wasResolved) {
+                            DispatchAttackTelegraph(actor, "End", 0);
+                        }
+                        SKSE::log::debug("[NPC Attack Direction] Timeout reset for {:08X}.", formID);
+                    }
+                }
+            });
+        });
+    }
+
+    void BeginAttackTracking(RE::Actor* a_actor, std::string_view a_startTag)
+    {
+        AttackTrackingState state;
+        state.rightHandStart = GetHandPositionInTorsoSpace(a_actor, false);
+        state.leftHandStart = GetHandPositionInTorsoSpace(a_actor, true);
+
+        bool inserted = false;
+        {
+            std::scoped_lock lock(g_attackTrackingMutex);
+            auto [it, didInsert] = g_attackTrackingStates.try_emplace(a_actor->GetFormID(), state);
+            inserted = didInsert;
+            if (inserted) {
+                state.generation = ++g_attackTrackingGeneration;
+                it->second.generation = state.generation;
+            }
+        }
+
+        if (!inserted) {
+            logger::debug(
+                "[NPC Attack Direction] Start ignored actor={:08X} tag={}: attack window already open.",
+                a_actor->GetFormID(), a_startTag);
+            return;
+        }
+
+        a_actor->SetGraphVariableInt(kAttackDirectionVariable, 0);
+        ScheduleAttackTrackingTimeout(a_actor, state.generation);
+        logger::debug(
+            "[NPC Attack Direction] Start actor={:08X} tag={} rightHand={} leftHand={}.",
+            a_actor->GetFormID(), a_startTag,
+            state.rightHandStart.has_value(), state.leftHandStart.has_value());
+    }
+
+    void ResolveAttackDirection(RE::Actor* a_actor, bool a_forceLeftHand)
+    {
+        AttackTrackingState state;
+        {
+            std::scoped_lock lock(g_attackTrackingMutex);
+            const auto it = g_attackTrackingStates.find(a_actor->GetFormID());
+            if (it == g_attackTrackingStates.end() || it->second.directionResolved) {
+                SKSE::log::debug(
+                    "[NPC Attack Direction] Resolve skipped actor={:08X}: {}.",
+                    a_actor->GetFormID(),
+                    it == g_attackTrackingStates.end() ? "no attack start" : "already resolved");
+                return;
+            }
+            state = it->second;
+        }
+
+        const auto rightCurrent = GetHandPositionInTorsoSpace(a_actor, false);
+        const auto leftCurrent = GetHandPositionInTorsoSpace(a_actor, true);
+
+        int direction = 0;
+        float selectedDistanceSquared = -1.0f;
+        auto considerHand = [&](const std::optional<RE::NiPoint3>& a_start,
+                                const std::optional<RE::NiPoint3>& a_current) {
+            if (!a_start || !a_current) {
+                return;
+            }
+
+            const float distanceSquared = (*a_current - *a_start).SqrLength();
+            if (distanceSquared > selectedDistanceSquared) {
+                selectedDistanceSquared = distanceSquared;
+                direction = ClassifySwingOrigin(*a_start, *a_current);
+            }
+        };
+
+        if (a_forceLeftHand) {
+            considerHand(state.leftHandStart, leftCurrent);
+        } else {
+            // Generic preHitFrame annotations do not identify the hand. The hand
+            // with the larger local-space movement is normally the attacking one.
+            considerHand(state.rightHandStart, rightCurrent);
+            considerHand(state.leftHandStart, leftCurrent);
+        }
+
+        if (direction == 0) {
+            direction = std::clamp(OARConverterUI::NPCAttackDirectionFallback, 0, 8);
+            if (direction == 0) {
+                SKSE::log::debug(
+                    "[NPC Attack Direction] Resolve skipped actor={:08X}: no measurable swing.",
+                    a_actor->GetFormID());
+                return;
+            }
+        }
+
+        {
+            std::scoped_lock lock(g_attackTrackingMutex);
+            const auto it = g_attackTrackingStates.find(a_actor->GetFormID());
+            if (it == g_attackTrackingStates.end() || it->second.generation != state.generation) {
+                return;
+            }
+            it->second.directionResolved = true;
+        }
+
+        const bool graphUpdated = a_actor->SetGraphVariableInt(kAttackDirectionVariable, direction);
+        DispatchAttackTelegraph(a_actor, "Resolved", direction);
+        SKSE::log::debug(
+            "[NPC Attack Direction] NPC {:08X}: direction={} distanceSquared={:.2f} graphUpdated={}.",
+            a_actor->GetFormID(), direction, selectedDistanceSquared, graphUpdated);
+    }
+
+}
 
 void UpdateNPCDirectionalState(RE::Actor* a_npc) {
     if (!a_npc || a_npc->IsDead() || !a_npc->Is3DLoaded()) return;
@@ -529,7 +818,7 @@ void Sink::InputListener::DispatchUpdate(const char* a_type, int a_value, int& a
     };
     eventSource->SendEvent(&event);
     a_previousValue = a_value;
-    SKSE::log::info("[DMKUpdate] Sent type={} value={}", a_type, a_value);
+    logger::debug("[DMKUpdate] Sent type={} value={}", a_type, a_value);
 }
 
 void Sink::InputListener::SyncExternalGraphState(RE::PlayerCharacter* a_player)
@@ -736,7 +1025,7 @@ RE::BSEventNotifyControl Sink::TweenInputListener::ProcessEvent(const SKSE::ModC
     }
 
     if (eventName == "DMKUpdate") {
-        SKSE::log::info(
+        SKSE::log::debug(
             "[DMKUpdate] Received type={} value={}",
             a_event->strArg.c_str(),
             static_cast<int>(a_event->numArg));
@@ -769,12 +1058,45 @@ RE::BSEventNotifyControl Sink::NpcCycleSink::ProcessEvent(const RE::BSAnimationG
     auto* actor = a_event->holder->As<RE::Actor>();
     if (!actor || actor->IsDead()) return RE::BSEventNotifyControl::kContinue;
 
-    const std::string_view eventName = a_event->tag;
+    const std::string_view rawEventName = a_event->tag.c_str();
+    const std::string eventName = ToLower(rawEventName);
     auto npc = const_cast<RE::Actor*>(actor);
     bool isPlayer = actor->IsPlayerRef();
 
     if(!isPlayer) {
-		UpdateNPCDirectionalState(npc);
+        UpdateNPCDirectionalState(npc);
+
+        const bool isAttackStart =
+            eventName == "attackstart" || eventName == "powerattack_start_end" || eventName == "bfco_attackstartfx";
+
+        if (isAttackStart) {
+            logger::debug(
+                "[NPC Attack Direction] Start event actor={:08X} tag={} recognized={}.",
+                npc->GetFormID(), rawEventName, isAttackStart);
+            BeginAttackTracking(npc, rawEventName);
+        }
+        else if (eventName.find("prehitframe") != std::string::npos) {
+            if (!OARConverterUI::NPCAttackDirectionAtWeaponSwing) {
+                ResolveAttackDirection(npc, false);
+            }
+        }
+        else if (eventName.find("weaponswingleft") != std::string::npos ||
+                 eventName.find("weaponleftswing") != std::string::npos) {
+            if (OARConverterUI::NPCAttackDirectionAtWeaponSwing) {
+                ResolveAttackDirection(npc, true);
+            }
+        }
+        else if (eventName.find("weaponswing") != std::string::npos) {
+            if (OARConverterUI::NPCAttackDirectionAtWeaponSwing) {
+                ResolveAttackDirection(npc, false);
+            }
+        }
+        else if (eventName == "attackwinstart" ||
+                 eventName == "attackstop" ||
+                 eventName == "sbf_staggerstart" || eventName == "sbf_staggerstop") {
+            logger::debug("[NPC Attack Direction] Reset actor={:08X} tag={}", npc->GetFormID(), rawEventName);
+            ResetAttackDirection(npc);
+        }
     }
     else {
         InputListener::GetSingleton()->UpdateDirectionalState();
@@ -796,6 +1118,7 @@ RE::BSEventNotifyControl Sink::NpcCombatTracker::ProcessEvent(const RE::TESComba
             NpcCombatTracker::RegisterSink(npc);
             break;
         case RE::ACTOR_COMBAT_STATE::kNone:
+            ResetAttackDirection(npc);
             if (OARConverterUI::NPCOnlyCombat) {
                 NpcCombatTracker::UnregisterSink(npc);
             }
